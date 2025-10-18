@@ -203,6 +203,11 @@ return [
         'data.marzban_sudo_username' => 'نام کاربری ادمین',
         'data.marzban_sudo_password' => 'رمز عبور ادمین',
 
+        'data.marzneshin_host' => 'آدرس پنل مرزنشین',
+        'data.marzneshin_sudo_username' => 'نام کاربری ادمین مرزنشین',
+        'data.marzneshin_sudo_password' => 'رمز عبور ادمین مرزنشین',
+        'data.marzneshin_node_hostname' => 'آدرس دامنه/سرور مرزنشین',
+
         'data.telegram_bot_token' => 'توکن ربات تلگرام',
         'data.telegram_admin_chat_id' => 'چت آی‌دی ادمین',
 

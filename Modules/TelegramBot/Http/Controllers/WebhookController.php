@@ -2,32 +2,33 @@
 
 namespace Modules\TelegramBot\Http\Controllers;
 
+use App\Models\Inbound;
 use App\Models\Order;
 use App\Models\Plan;
 use App\Models\Setting;
-use App\Services\XUIService;
-use App\Models\User;
-use App\Services\MarzbanService;
-use App\Models\Inbound;
-use Modules\Ticketing\Models\Ticket;
-use Illuminate\Routing\Controller;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Facades\Hash;
-use Telegram\Bot\Laravel\Facades\Telegram;
 use App\Models\TelegramBotSetting;
 use App\Models\Transaction;
-use Illuminate\Support\Facades\DB;
-use Telegram\Bot\Keyboard\Keyboard;
-use Illuminate\Support\Str;
+use App\Models\User;
+use App\Services\MarzbanService;
+use App\Services\MarzneshinService;
+use App\Services\XUIService;
 use Carbon\Carbon;
+use Illuminate\Http\Request;
+use Illuminate\Routing\Controller;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+use Modules\Ticketing\Models\Ticket;
+use Telegram\Bot\Keyboard\Keyboard;
+use Telegram\Bot\Laravel\Facades\Telegram;
 
 class WebhookController extends Controller
 {
     protected $settings;
-    protected $botSettings;
 
+    protected $botSettings;
 
     public function handle(Request $request)
     {
@@ -38,7 +39,9 @@ class WebhookController extends Controller
             $this->botSettings = TelegramBotSetting::all()->pluck('value', 'key');
             $botToken = $this->settings->get('telegram_bot_token');
 
-            if (!$botToken) return 'ok';
+            if (! $botToken) {
+                return 'ok';
+            }
             Telegram::setAccessToken($botToken);
 
             $update = Telegram::getWebhookUpdate();
@@ -54,16 +57,14 @@ class WebhookController extends Controller
                 }
             }
         } catch (\Exception $e) {
-            Log::error('Telegram Bot Error: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
+            Log::error('Telegram Bot Error: '.$e->getMessage(), ['trace' => $e->getTraceAsString()]);
         }
+
         return 'ok';
     }
 
-
-
     /**
      * پردازش پیام‌های متنی ارسالی به ربات.
-     * @param $update
      */
     protected function handleTextMessage($update)
     {
@@ -74,70 +75,84 @@ class WebhookController extends Controller
         $user = User::where('telegram_chat_id', $chatId)->first();
         $userFirstName = $message->getFrom()->getFirstName() ?? 'کاربر';
 
+        if (! $user) {
+            $password = Str::random(8);
+            $user = User::create([
+                'name' => $userFirstName,
+                'email' => $chatId.'@telegram.user',
+                'password' => Hash::make($password),
+                'telegram_chat_id' => $chatId,
+            ]);
 
-        if (!$user) {
-                $password = Str::random(8);
-                $user = User::create([
-                    'name' => $userFirstName,
-                    'email' => $chatId . '@telegram.user',
-                    'password' => Hash::make($password),
-                    'telegram_chat_id' => $chatId,
-                ]);
+            $welcomeMessage = "سلام *{$userFirstName}* عزیز به ربات ما خوش آمدید!\n\nیک حساب کاربری به صورت خودکار برای شما ایجاد شد:\n📧 **ایمیل:** `{$user->email}`\n🔑 **رمز عبور:** `{$password}`";
 
-                $welcomeMessage = "سلام *{$userFirstName}* عزیز به ربات ما خوش آمدید!\n\nیک حساب کاربری به صورت خودکار برای شما ایجاد شد:\n📧 **ایمیل:** `{$user->email}`\n🔑 **رمز عبور:** `{$password}`";
+            // بررسی وجود کد معرف در دستور /start
+            if (Str::startsWith($text, '/start ')) {
+                $referralCode = Str::after($text, '/start ');
+                $referrer = User::where('referral_code', $referralCode)->first();
 
-                // بررسی وجود کد معرف در دستور /start
-                if (Str::startsWith($text, '/start ')) {
-                    $referralCode = Str::after($text, '/start ');
-                    $referrer = User::where('referral_code', $referralCode)->first();
+                if ($referrer) {
+                    $user->referrer_id = $referrer->id;
+                    $user->save();
 
-                    if ($referrer) {
-                        $user->referrer_id = $referrer->id;
-                        $user->save();
+                    $welcomeGift = (int) $this->settings->get('referral_welcome_gift', 0);
+                    if ($welcomeGift > 0) {
+                        $user->increment('balance', $welcomeGift);
+                        $welcomeMessage .= "\n\n🎁 شما یک هدیه خوش‌آمدگویی به مبلغ *".number_format($welcomeGift).' تومان* دریافت کردید!';
+                    }
 
-                        $welcomeGift = (int) $this->settings->get('referral_welcome_gift', 0);
-                        if ($welcomeGift > 0) {
-                            $user->increment('balance', $welcomeGift);
-                            $welcomeMessage .= "\n\n🎁 شما یک هدیه خوش‌آمدگویی به مبلغ *" . number_format($welcomeGift) . " تومان* دریافت کردید!";
-                        }
+                    if ($referrer->telegram_chat_id) {
+                        try {
+                            $referrerNotificationMessage = "👤 *خبر خوب!*\n\n";
+                            $referrerNotificationMessage .= "کاربر جدیدی با نام «{$userFirstName}» با لینک دعوت شما به ربات پیوست.\n\n";
+                            $referrerNotificationMessage .= '🎁 پاداش شما پس از اولین خرید موفق ایشان به کیف پولتان اضافه خواهد شد. به دعوت کردن ادامه دهید!';
 
-                        if ($referrer->telegram_chat_id) {
-                            try {
-                                $referrerNotificationMessage = "👤 *خبر خوب!*\n\n";
-                                $referrerNotificationMessage .= "کاربر جدیدی با نام «{$userFirstName}» با لینک دعوت شما به ربات پیوست.\n\n";
-                                $referrerNotificationMessage .= "🎁 پاداش شما پس از اولین خرید موفق ایشان به کیف پولتان اضافه خواهد شد. به دعوت کردن ادامه دهید!";
-
-                                Telegram::sendMessage([
-                                    'chat_id' => $referrer->telegram_chat_id,
-                                    'text' => $referrerNotificationMessage,
-                                    'parse_mode' => 'Markdown'
-                                ]);
-                            } catch (\Exception $e) {
-                                Log::error("Failed to send referral notification to referrer {$referrer->id}: " . $e->getMessage());
-                            }
+                            Telegram::sendMessage([
+                                'chat_id' => $referrer->telegram_chat_id,
+                                'text' => $referrerNotificationMessage,
+                                'parse_mode' => 'Markdown',
+                            ]);
+                        } catch (\Exception $e) {
+                            Log::error("Failed to send referral notification to referrer {$referrer->id}: ".$e->getMessage());
                         }
                     }
                 }
-                Telegram::sendMessage(['chat_id' => $chatId, 'text' => $welcomeMessage, 'parse_mode' => 'Markdown', 'reply_markup' => $this->getReplyMainMenu()]);
-                return;
+            }
+            Telegram::sendMessage(['chat_id' => $chatId, 'text' => $welcomeMessage, 'parse_mode' => 'Markdown', 'reply_markup' => $this->getReplyMainMenu()]);
+
+            return;
         }
 
         switch ($text) {
-            case '🛒 خرید سرویس': $this->sendPlans($chatId); return;
-            case '🛠 سرویس‌های من': $this->sendMyServices($user); return;
-            case '💰 کیف پول': $this->sendWalletMenu($user); return;
-            case '🎁 دعوت از دوستان': $this->sendReferralMenu($user); return;
-            case '💬 پشتیبانی': $this->showSupportMenu($user); return;
-            case '📚 راهنمای اتصال': $this->sendTutorialsMenu($chatId); return;
+            case '🛒 خرید سرویس': $this->sendPlans($chatId);
+
+                return;
+            case '🛠 سرویس‌های من': $this->sendMyServices($user);
+
+                return;
+            case '💰 کیف پول': $this->sendWalletMenu($user);
+
+                return;
+            case '🎁 دعوت از دوستان': $this->sendReferralMenu($user);
+
+                return;
+            case '💬 پشتیبانی': $this->showSupportMenu($user);
+
+                return;
+            case '📚 راهنمای اتصال': $this->sendTutorialsMenu($chatId);
+
+                return;
         }
 
         if ($user->bot_state === 'awaiting_deposit_amount') {
             $this->processDepositAmount($user, $text);
+
             return;
         }
 
         if ($user->bot_state && (Str::startsWith($user->bot_state, 'awaiting_new_ticket_') || Str::startsWith($user->bot_state, 'awaiting_ticket_reply'))) {
             $this->processTicketConversation($user, $text, $update);
+
             return;
         }
 
@@ -147,24 +162,22 @@ class WebhookController extends Controller
                 'chat_id' => $chatId,
                 'text' => "سلام مجدد *{$user->name}*! لطفاً یکی از گزینه‌ها را از منوی پایین انتخاب کنید:",
                 'parse_mode' => 'Markdown',
-                'reply_markup' => $this->getReplyMainMenu()
+                'reply_markup' => $this->getReplyMainMenu(),
             ]);
+
             return;
         }
 
         Telegram::sendMessage([
             'chat_id' => $chatId,
             'text' => 'دستور شما نامفهوم است. لطفاً از دکمه‌های منوی پایین استفاده کنید.',
-            'reply_markup' => $this->getReplyMainMenu()
+            'reply_markup' => $this->getReplyMainMenu(),
         ]);
     }
 
-
-
     /**
      * ایجاد اکانت کاربر در پنل سرویس‌دهنده (Marzban/XUI) و بازگرداندن لینک کانفیگ.
-     * @param Order $order
-     * @param Plan $plan
+     *
      * @return string|null
      */
     protected function provisionUserAccount(Order $order, Plan $plan)
@@ -173,13 +186,13 @@ class WebhookController extends Controller
         $configLink = null;
 
         // مطمئن می‌شویم expires_at ست شده است.
-        if (!$order->expires_at) {
+        if (! $order->expires_at) {
             $order->update(['expires_at' => now()->addDays($plan->duration_days)]);
         }
 
         $expireTimestamp = $order->expires_at->timestamp;
         $dataLimitBytes = $plan->data_limit_gb * 1073741824;
-        $uniqueUsername = "user-{$order->user_id}-order-{$order->id}";
+        $uniqueUsername = "user_{$order->user_id}_order_{$order->id}";
 
         try {
             if (($settings['panel_type'] ?? 'marzban') === 'marzban') {
@@ -192,15 +205,43 @@ class WebhookController extends Controller
                 );
 
                 $response = $marzban->createUser([
-                    'username'   => $uniqueUsername,
-                    'expire'     => $expireTimestamp,
+                    'username' => $uniqueUsername,
+                    'expire' => $expireTimestamp,
                     'data_limit' => $dataLimitBytes,
                 ]);
 
-                if (!empty($response['subscription_url'])) {
+                if (! empty($response['subscription_url'])) {
                     $configLink = $marzban->generateSubscriptionLink($response);
                 } else {
                     Log::error('Marzban user creation failed.', $response);
+                }
+
+            } elseif (($settings['panel_type'] ?? 'marzban') === 'marzneshin') {
+                // ----------- اتصال به مرزنشین -----------
+                $marzneshin = new MarzneshinService(
+                    $settings['marzneshin_host'] ?? '',
+                    $settings['marzneshin_sudo_username'] ?? '',
+                    $settings['marzneshin_sudo_password'] ?? '',
+                    $settings['marzneshin_node_hostname'] ?? null
+                );
+
+                $userData = [
+                    'username' => $uniqueUsername,
+                    'expire' => $expireTimestamp,
+                    'data_limit' => $dataLimitBytes,
+                ];
+
+                // Add plan-specific service_ids if available
+                if ($plan->marzneshin_service_ids && is_array($plan->marzneshin_service_ids) && count($plan->marzneshin_service_ids) > 0) {
+                    $userData['service_ids'] = $plan->marzneshin_service_ids;
+                }
+
+                $response = $marzneshin->createUser($userData);
+
+                if (! empty($response['subscription_url'])) {
+                    $configLink = $marzneshin->generateSubscriptionLink($response);
+                } else {
+                    Log::error('Marzneshin user creation failed.', $response);
                 }
 
             } elseif (($settings['panel_type'] ?? 'marzban') === 'xui') {
@@ -208,8 +249,9 @@ class WebhookController extends Controller
 
                 // 1. دریافت Inbound ID از تنظیمات. این همان عددی است که در XUIService استفاده می‌شود.
                 $inboundId = $settings['xui_default_inbound_id'] ?? null;
-                if (!$inboundId) {
-                    Log::error("XUI Inbound ID is not set in settings.");
+                if (! $inboundId) {
+                    Log::error('XUI Inbound ID is not set in settings.');
+
                     return null;
                 }
 
@@ -244,7 +286,7 @@ class WebhookController extends Controller
                             $subId = $response['generated_subId'] ?? null;
                             $subBaseUrl = rtrim($settings['xui_subscription_url_base'] ?? '', '/');
                             if ($subId && $subBaseUrl) {
-                                $configLink = $subBaseUrl . '/sub/' . $subId; // برخی پنل‌ها از sub/ و برخی از json/ استفاده می‌کنند.
+                                $configLink = $subBaseUrl.'/sub/'.$subId; // برخی پنل‌ها از sub/ و برخی از json/ استفاده می‌کنند.
                             }
                         } else {
                             $uuid = $response['generated_uuid'] ?? null;
@@ -252,7 +294,7 @@ class WebhookController extends Controller
                                 // ساخت لینک تکی VLESS (بر اساس منطق موجود در OrderResource)
                                 $streamSettings = json_decode($inboundData['streamSettings'] ?? '{}', true);
                                 $parsedUrl = parse_url($settings['xui_host'] ?? 'http://example.com');
-                                $serverIpOrDomain = !empty($inboundData['listen']) ? $inboundData['listen'] : ($parsedUrl['host'] ?? 'server_ip');
+                                $serverIpOrDomain = ! empty($inboundData['listen']) ? $inboundData['listen'] : ($parsedUrl['host'] ?? 'server_ip');
                                 $port = $inboundData['port'] ?? 443;
                                 $remark = $inboundData['remark'] ?? 'خدمات_وی_پی_ان';
 
@@ -261,16 +303,16 @@ class WebhookController extends Controller
                                     'security' => $streamSettings['security'] ?? null,
                                     'path' => $streamSettings['wsSettings']['path'] ?? ($streamSettings['grpcSettings']['serviceName'] ?? null),
                                     'sni' => $streamSettings['tlsSettings']['serverName'] ?? null,
-                                    'host' => $streamSettings['wsSettings']['headers']['Host'] ?? null
+                                    'host' => $streamSettings['wsSettings']['headers']['Host'] ?? null,
                                 ];
                                 $params = http_build_query(array_filter($paramsArray));
-                                $fullRemark = $uniqueUsername . '|' . $remark;
-                                $configLink = "vless://{$uuid}@{$serverIpOrDomain}:{$port}?{$params}#" . urlencode($fullRemark);
+                                $fullRemark = $uniqueUsername.'|'.$remark;
+                                $configLink = "vless://{$uuid}@{$serverIpOrDomain}:{$port}?{$params}#".urlencode($fullRemark);
                             }
                         }
                     }
 
-                    if (!$configLink) {
+                    if (! $configLink) {
                         Log::error('XUI config link generation failed.', ['response' => $response, 'inbound' => $inboundId]);
                     }
 
@@ -279,22 +321,22 @@ class WebhookController extends Controller
                 }
             }
         } catch (\Exception $e) {
-            Log::error("Failed to provision account for Order {$order->id}: " . $e->getMessage());
+            Log::error("Failed to provision account for Order {$order->id}: ".$e->getMessage());
         }
 
         return $configLink;
     }
 
-
-    protected function showSupportMenu($user) {
+    protected function showSupportMenu($user)
+    {
         $user->update(['bot_state' => 'awaiting_new_ticket_subject']);
         $cancelKeyboard = Keyboard::make()->inline()->row([
-            Keyboard::inlineButton(['text' => '❌ انصراف', 'callback_data' => '/cancel_action'])
+            Keyboard::inlineButton(['text' => '❌ انصراف', 'callback_data' => '/cancel_action']),
         ]);
         Telegram::sendMessage([
             'chat_id' => $user->telegram_chat_id,
             'text' => 'لطفاً موضوع تیکت خود را ارسال کنید، یا برای انصراف روی دکمه زیر کلیک کنید:',
-            'reply_markup' => $cancelKeyboard
+            'reply_markup' => $cancelKeyboard,
         ]);
     }
 
@@ -319,14 +361,16 @@ class WebhookController extends Controller
 
     /**
      * پردازش پرداخت از طریق کیف پول کاربر.
-     * @param User $user
-     * @param int $planId
+     *
+     * @param  User  $user
+     * @param  int  $planId
      */
     protected function processWalletPayment($user, $planId)
     {
         $plan = Plan::find($planId);
-        if (!$plan) {
+        if (! $plan) {
             Telegram::sendMessage(['chat_id' => $user->telegram_chat_id, 'text' => '❌ پلن مورد نظر یافت نشد.']);
+
             return;
         }
 
@@ -335,6 +379,7 @@ class WebhookController extends Controller
 
         if ($userBalance < $planPrice) {
             Telegram::sendMessage(['chat_id' => $user->telegram_chat_id, 'text' => '❌ موجودی کیف پول شما برای خرید این پلن کافی نیست.']);
+
             return;
         }
 
@@ -351,6 +396,7 @@ class WebhookController extends Controller
                     'type' => 'purchase', 'status' => 'completed',
                     'description' => "خرید سرویس {$plan->name} (پرداخت از کیف پول)",
                 ]);
+
                 return $order;
             });
 
@@ -358,7 +404,7 @@ class WebhookController extends Controller
             $settings = Setting::all()->pluck('value', 'key');
             $panelType = $settings->get('panel_type');
             $config = null;
-            $uniqueUsername = "user-{$user->id}-order-{$order->id}";
+            $uniqueUsername = "user_{$user->id}_order_{$order->id}";
 
             if ($panelType === 'marzban') {
                 $trafficInBytes = $plan->volume_gb * 1073741824;
@@ -376,6 +422,30 @@ class WebhookController extends Controller
                     $config = $marzbanService->generateSubscriptionLink($response);
                 } else {
                     Log::error('Telegram Wallet Payment - Marzban Error', ['response' => $response]);
+                }
+
+            } elseif ($panelType === 'marzneshin') {
+                $trafficInBytes = $plan->volume_gb * 1073741824;
+                $marzneshinService = new MarzneshinService(
+                    $settings->get('marzneshin_host'),
+                    $settings->get('marzneshin_sudo_username'),
+                    $settings->get('marzneshin_sudo_password'),
+                    $settings->get('marzneshin_node_hostname')
+                );
+                $expireTimestamp = $order->expires_at->timestamp;
+                $userData = ['username' => $uniqueUsername, 'data_limit' => $trafficInBytes, 'expire' => $expireTimestamp];
+
+                // Add plan-specific service_ids if available
+                if ($plan->marzneshin_service_ids && is_array($plan->marzneshin_service_ids) && count($plan->marzneshin_service_ids) > 0) {
+                    $userData['service_ids'] = $plan->marzneshin_service_ids;
+                }
+
+                $response = $marzneshinService->createUser($userData);
+
+                if ($response && isset($response['username'])) {
+                    $config = $marzneshinService->generateSubscriptionLink($response);
+                } else {
+                    Log::error('Telegram Wallet Payment - Marzneshin Error', ['response' => $response]);
                 }
 
             } elseif ($panelType === 'xui') {
@@ -399,19 +469,19 @@ class WebhookController extends Controller
                                 $subId = $response['generated_subId'];
                                 $subBaseUrl = rtrim($settings->get('xui_subscription_url_base'), '/');
                                 if ($subBaseUrl) {
-                                    $config = $subBaseUrl . '/json/' . $subId;
+                                    $config = $subBaseUrl.'/json/'.$subId;
                                 }
                             } else {
                                 $uuid = $response['generated_uuid'];
                                 $streamSettings = json_decode($inboundData['streamSettings'], true);
                                 $parsedUrl = parse_url($settings->get('xui_host'));
-                                $serverIpOrDomain = !empty($inboundData['listen']) ? $inboundData['listen'] : $parsedUrl['host'];
+                                $serverIpOrDomain = ! empty($inboundData['listen']) ? $inboundData['listen'] : $parsedUrl['host'];
                                 $port = $inboundData['port'];
                                 $remark = $inboundData['remark'];
                                 $paramsArray = ['type' => $streamSettings['network'] ?? null, 'security' => $streamSettings['security'] ?? null, 'path' => $streamSettings['wsSettings']['path'] ?? ($streamSettings['grpcSettings']['serviceName'] ?? null), 'sni' => $streamSettings['tlsSettings']['serverName'] ?? null, 'host' => $streamSettings['wsSettings']['headers']['Host'] ?? null];
                                 $params = http_build_query(array_filter($paramsArray));
-                                $fullRemark = $uniqueUsername . '|' . $remark;
-                                $config = "vless://{$uuid}@{$serverIpOrDomain}:{$port}?{$params}#" . urlencode($fullRemark);
+                                $fullRemark = $uniqueUsername.'|'.$remark;
+                                $config = "vless://{$uuid}@{$serverIpOrDomain}:{$port}?{$params}#".urlencode($fullRemark);
                             }
                         } else {
                             Log::error('Telegram Wallet Payment - XUI Error', ['response' => $response]);
@@ -426,18 +496,18 @@ class WebhookController extends Controller
                 Telegram::sendMessage([
                     'chat_id' => $user->telegram_chat_id,
                     'text' => "✅ خرید شما با موفقیت انجام شد و سرویس *{$plan->name}* فوراً برای شما فعال گردید. می‌توانید از بخش 'سرویس‌های من' کانفیگ خود را دریافت کنید.",
-                    'parse_mode' => 'Markdown'
+                    'parse_mode' => 'Markdown',
                 ]);
             } else {
                 // اگر به هر دلیلی ساخت کانفیگ با خطا مواجه شد
                 Telegram::sendMessage([
                     'chat_id' => $user->telegram_chat_id,
-                    'text' => "⚠️ پرداخت شما موفق بود اما در ساخت خودکار سرویس خطایی رخ داد. لطفاً فوراً به پشتیبانی اطلاع دهید. شماره سفارش شما: #{$order->id}"
+                    'text' => "⚠️ پرداخت شما موفق بود اما در ساخت خودکار سرویس خطایی رخ داد. لطفاً فوراً به پشتیبانی اطلاع دهید. شماره سفارش شما: #{$order->id}",
                 ]);
             }
 
         } catch (\Exception $e) {
-            Log::error('Wallet Payment Failed: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
+            Log::error('Wallet Payment Failed: '.$e->getMessage(), ['trace' => $e->getTraceAsString()]);
             Telegram::sendMessage(['chat_id' => $user->telegram_chat_id, 'text' => '❌ خطایی در هنگام پردازش خرید رخ داد. لطفاً با پشتیبانی تماس بگیرید.']);
         }
     }
@@ -451,13 +521,12 @@ class WebhookController extends Controller
                 ['💬 پشتیبانی', '📚 راهنمای اتصال'],
             ],
             'resize_keyboard' => true,
-            'one_time_keyboard' => false
+            'one_time_keyboard' => false,
         ]);
     }
 
     /**
      * پردازش Callback Query ها (کلیک روی دکمه‌های Inline).
-     * @param $update
      */
     protected function handleCallbackQuery($update)
     {
@@ -469,37 +538,30 @@ class WebhookController extends Controller
         try {
             Telegram::answerCallbackQuery(['callback_query_id' => $callbackQuery->getId()]);
         } catch (\Exception $e) {
-            Log::warning('Could not answer callback query: ' . $e->getMessage());
+            Log::warning('Could not answer callback query: '.$e->getMessage());
         }
 
-
-
-        if (!$user) return;
+        if (! $user) {
+            return;
+        }
         $user->update(['bot_state' => null]);
-
-
 
         if (Str::startsWith($data, 'buy_plan_')) {
             $planId = Str::after($data, 'buy_plan_');
             $this->startPurchaseProcess($user, $planId);
-        }
-        elseif (Str::startsWith($data, 'pay_wallet_')) {
+        } elseif (Str::startsWith($data, 'pay_wallet_')) {
             $planId = Str::after($data, 'pay_wallet_');
             $this->processWalletPayment($user, $planId);
         } elseif (Str::startsWith($data, 'pay_card_')) {
             $orderId = Str::after($data, 'pay_card_');
             $this->sendCardPaymentInfo($chatId, $orderId);
-        }
-
-        elseif (Str::startsWith($data, 'deposit_amount_')) {
+        } elseif (Str::startsWith($data, 'deposit_amount_')) {
             $amount = Str::after($data, 'deposit_amount_');
             $this->processDepositAmount($user, $amount);
-        }
-        elseif ($data === 'deposit_custom') {
+        } elseif ($data === 'deposit_custom') {
             $user->update(['bot_state' => 'awaiting_deposit_amount']);
             Telegram::sendMessage(['chat_id' => $user->telegram_chat_id, 'text' => 'لطفاً مبلغ دلخواه خود را (به تومان) به صورت عددی وارد کنید:']);
-        }
-        elseif (Str::startsWith($data, 'close_ticket_')) {
+        } elseif (Str::startsWith($data, 'close_ticket_')) {
             $ticketId = Str::after($data, 'close_ticket_');
             $ticket = $user->tickets()->where('id', $ticketId)->first();
             if ($ticket && $ticket->status !== 'closed') {
@@ -508,16 +570,15 @@ class WebhookController extends Controller
             }
         } elseif (Str::startsWith($data, 'reply_ticket_')) {
             $ticketId = Str::after($data, 'reply_ticket_');
-            $user->update(['bot_state' => 'awaiting_ticket_reply|' . $ticketId]);
-            Telegram::sendMessage(['chat_id' => $chatId, 'text' => "✏️ لطفاً پاسخ خود را ارسال کنید."]);
+            $user->update(['bot_state' => 'awaiting_ticket_reply|'.$ticketId]);
+            Telegram::sendMessage(['chat_id' => $chatId, 'text' => '✏️ لطفاً پاسخ خود را ارسال کنید.']);
         } elseif ($data === '/start') {
             Telegram::sendMessage(['chat_id' => $chatId, 'text' => "سلام مجدد *{$user->name}*! لطفاً یکی از گزینه‌ها را انتخاب کنید:", 'parse_mode' => 'Markdown', 'reply_markup' => $this->getMainMenuKeyboard()]);
         } elseif ($data === '/plans') {
             $this->sendPlans($chatId);
         } elseif ($data === '/my_services') {
             $this->sendMyServices($user);
-        }
-        elseif ($data === '/cancel_action') {
+        } elseif ($data === '/cancel_action') {
             // وضعیت ربات را پاک کن
             $user->update(['bot_state' => null]);
 
@@ -526,37 +587,28 @@ class WebhookController extends Controller
                 'chat_id' => $chatId,
                 'message_id' => $callbackQuery->getMessage()->getMessageId(),
                 'text' => '✅ عملیات لغو شد.',
-                'reply_markup' => null // حذف کیبورد
+                'reply_markup' => null, // حذف کیبورد
             ]);
 
             // پیام راهنمای جدید با منوی اصلی ارسال کن
             Telegram::sendMessage([
                 'chat_id' => $chatId,
                 'text' => 'لطفاً یکی از گزینه‌ها را انتخاب کنید:',
-                'reply_markup' => $this->getReplyMainMenu() // یا هر کیبورد اصلی دیگری که دارید
+                'reply_markup' => $this->getReplyMainMenu(), // یا هر کیبورد اصلی دیگری که دارید
             ]);
-        }
-
-        elseif ($data === '/wallet') {
+        } elseif ($data === '/wallet') {
             $this->sendWalletMenu($user);
 
         } elseif ($data === '/referral') {
             $this->sendReferralMenu($user);
-        }
-
-
-
-        elseif ($data === '/deposit') {
+        } elseif ($data === '/deposit') {
             $this->showDepositOptions($user);
-        }
-        elseif ($data === '/transactions') { // NEW: اضافه شده برای نمایش تاریخچه تراکنش‌ها
+        } elseif ($data === '/transactions') { // NEW: اضافه شده برای نمایش تاریخچه تراکنش‌ها
             $this->sendTransactions($user);
-        }
-        elseif ($data === '/support') {
+        } elseif ($data === '/support') {
             $user->update(['bot_state' => 'awaiting_new_ticket_subject']);
             Telegram::sendMessage(['chat_id' => $chatId, 'text' => 'لطفاً موضوع تیکت خود را ارسال کنید:']);
-        }
-        elseif ($data === '/tutorials') {
+        } elseif ($data === '/tutorials') {
             $this->sendTutorialsMenu($chatId);
         } elseif ($data === '/tutorial_android') {
             $this->sendTutorial('android', $chatId);
@@ -567,32 +619,31 @@ class WebhookController extends Controller
         }
     }
 
-
     /**
      * نمایش گزینه‌های شارژ کیف پول.
-     * @param User $user
+     *
+     * @param  User  $user
      */
     protected function showDepositOptions($user)
     {
-        $message = "لطفاً یکی از مبلغ‌های زیر را برای شارژ انتخاب کنید یا مبلغ دلخواه خود را وارد نمایید:";
+        $message = 'لطفاً یکی از مبلغ‌های زیر را برای شارژ انتخاب کنید یا مبلغ دلخواه خود را وارد نمایید:';
         $keyboard = Keyboard::make()->inline();
 
         $depositAmountsJson = $this->botSettings->get('deposit_amounts');
         if ($depositAmountsJson) {
             $amountsArray = json_decode($depositAmountsJson, true);
 
-            if (is_array($amountsArray) && !empty($amountsArray)) {
+            if (is_array($amountsArray) && ! empty($amountsArray)) {
                 $amountButtons = [];
                 foreach ($amountsArray as $item) {
                     $amount = $item['amount'] ?? null;
                     if (is_numeric($amount)) {
                         $amountButtons[] = Keyboard::inlineButton([
-                            'text' => number_format($amount) . ' تومان',
-                            'callback_data' => 'deposit_amount_' . $amount
+                            'text' => number_format($amount).' تومان',
+                            'callback_data' => 'deposit_amount_'.$amount,
                         ]);
                     }
                 }
-
 
                 foreach (array_chunk($amountButtons, 2) as $rowOfButtons) {
                     $keyboard->row($rowOfButtons);
@@ -607,13 +658,14 @@ class WebhookController extends Controller
         Telegram::sendMessage([
             'chat_id' => $user->telegram_chat_id,
             'text' => $message,
-            'reply_markup' => $keyboard
+            'reply_markup' => $keyboard,
         ]);
     }
 
     /**
      * نمایش منوی کیف پول و موجودی کاربر.
-     * @param User $user
+     *
+     * @param  User  $user
      */
     protected function sendWalletMenu($user)
     {
@@ -628,8 +680,9 @@ class WebhookController extends Controller
 
     /**
      * ثبت سفارش شارژ حساب برای مبلغ وارد شده و هدایت به صفحه پرداخت.
-     * @param User $user
-     * @param string $amount
+     *
+     * @param  User  $user
+     * @param  string  $amount
      */
     protected function processDepositAmount($user, $amount)
     {
@@ -637,32 +690,32 @@ class WebhookController extends Controller
         $amount = str_replace(',', '', $amount);
         $amount = (int) $amount;
 
-        if (!is_numeric($amount) || $amount < 1000) {
+        if (! is_numeric($amount) || $amount < 1000) {
             Telegram::sendMessage(['chat_id' => $user->telegram_chat_id, 'text' => '❌ مبلغ وارد شده نامعتبر است. لطفاً یک عدد (به تومان) و بیشتر از ۱۰۰۰ وارد کنید.']);
+
             return;
         }
-
 
         $order = $user->orders()->create([
             'plan_id' => null,
             'status' => 'pending',
             'source' => 'telegram',
-            'amount' => $amount
+            'amount' => $amount,
         ]);
 
         $user->update(['bot_state' => null]);
-
 
         $this->sendCardPaymentInfo($user->telegram_chat_id, $order->id);
     }
 
     /**
      * نمایش منوی آموزش‌ها.
-     * @param int $chatId
+     *
+     * @param  int  $chatId
      */
     protected function sendTutorialsMenu($chatId)
     {
-        $message = "لطفاً سیستم‌عامل خود را برای دریافت راهنمای اتصال انتخاب کنید:";
+        $message = 'لطفاً سیستم‌عامل خود را برای دریافت راهنمای اتصال انتخاب کنید:';
         $keyboard = Keyboard::make()->inline()
             ->row([Keyboard::inlineButton(['text' => '📱 اندروید (Android)', 'callback_data' => '/tutorial_android'])])
             ->row([Keyboard::inlineButton(['text' => '🍏 آیفون (iOS)', 'callback_data' => '/tutorial_ios'])])
@@ -675,7 +728,6 @@ class WebhookController extends Controller
 
     /**
      * پردازش پیام‌های حاوی عکس (رسید یا پیوست تیکت).
-     * @param $update
      */
     protected function handlePhotoMessage($update)
     {
@@ -683,14 +735,16 @@ class WebhookController extends Controller
         $chatId = $message->getChat()->getId();
         $user = User::where('telegram_chat_id', $chatId)->first();
 
-        if (!$user || !$user->bot_state) {
+        if (! $user || ! $user->bot_state) {
             Telegram::sendMessage(['chat_id' => $chatId, 'text' => '❌ لطفاً ابتدا یک عملیات مانند ثبت رسید را شروع کنید، سپس عکس را ارسال نمایید.']);
+
             return;
         }
 
         // پاسخ تیکت با عکس
         if (Str::startsWith($user->bot_state, 'awaiting_ticket_reply|')) {
             $this->processTicketConversation($user, '📎 فایل ارسال شد', $update);
+
             return;
         }
 
@@ -707,10 +761,10 @@ class WebhookController extends Controller
                     $fileContents = file_get_contents("https://api.telegram.org/file/bot{$botToken}/{$file->getFilePath()}");
 
                     if ($fileContents === false) {
-                        throw new \Exception("Failed to download file from Telegram.");
+                        throw new \Exception('Failed to download file from Telegram.');
                     }
 
-                    $fileName = 'receipts/' . Str::random(40) . '.jpg';
+                    $fileName = 'receipts/'.Str::random(40).'.jpg';
                     Storage::disk('public')->put($fileName, $fileContents);
 
                     $order->update(['card_payment_receipt' => $fileName]);
@@ -722,12 +776,12 @@ class WebhookController extends Controller
                     if ($adminChatId) {
                         Telegram::sendMessage([
                             'chat_id' => $adminChatId,
-                            'text' => "رسید جدید برای سفارش #{$order->id} ثبت شد. مبلغ: " . number_format($order->amount) . " تومان. (کاربر: {$user->name} - #{$user->id})\nلینک رسید: " . Storage::disk('public')->url($fileName),
-                            'parse_mode' => 'Markdown'
+                            'text' => "رسید جدید برای سفارش #{$order->id} ثبت شد. مبلغ: ".number_format($order->amount)." تومان. (کاربر: {$user->name} - #{$user->id})\nلینک رسید: ".Storage::disk('public')->url($fileName),
+                            'parse_mode' => 'Markdown',
                         ]);
                     }
                 } catch (\Exception $e) {
-                    Log::error("Telegram receipt processing failed for order {$orderId}: " . $e->getMessage());
+                    Log::error("Telegram receipt processing failed for order {$orderId}: ".$e->getMessage());
                     Telegram::sendMessage(['chat_id' => $chatId, 'text' => '❌ خطا در پردازش رسید شما رخ داد. لطفاً مطمئن شوید که عکس را به درستی ارسال کرده‌اید و دوباره تلاش کنید.']);
                 }
             } else {
@@ -736,12 +790,11 @@ class WebhookController extends Controller
         }
     }
 
-
     /**
      * مدیریت مکالمات تیکت (ارسال تیکت جدید یا پاسخ به تیکت موجود).
-     * @param User $user
-     * @param string $text
-     * @param $update
+     *
+     * @param  User  $user
+     * @param  string  $text
      */
     protected function processTicketConversation($user, $text, $update = null)
     {
@@ -762,12 +815,12 @@ class WebhookController extends Controller
                         $botToken = $this->settings->get('telegram_bot_token');
                         $file = Telegram::getFile(['file_id' => $photo->getFileId()]);
                         $fileContents = file_get_contents("https://api.telegram.org/file/bot{$botToken}/{$file->getFilePath()}");
-                        $fileName = 'ticket_attachments/' . Str::random(40) . '.jpg';
+                        $fileName = 'ticket_attachments/'.Str::random(40).'.jpg';
                         Storage::disk('public')->put($fileName, $fileContents);
                         $replyData['attachment_path'] = $fileName;
-                        $replyData['message'] = $replyData['message'] . "\n[📎 پیوست تصویر]";
+                        $replyData['message'] = $replyData['message']."\n[📎 پیوست تصویر]";
                     } catch (\Exception $e) {
-                        Log::error("Ticket attachment upload failed: " . $e->getMessage());
+                        Log::error('Ticket attachment upload failed: '.$e->getMessage());
                     }
                 }
 
@@ -777,14 +830,14 @@ class WebhookController extends Controller
 
                 Telegram::sendMessage([
                     'chat_id' => $chatId,
-                    'text' => "✅ پاسخ شما با موفقیت ثبت شد.",
+                    'text' => '✅ پاسخ شما با موفقیت ثبت شد.',
                 ]);
             }
         }
 
         // وضعیت گرفتن موضوع تیکت جدید
         elseif ($state === 'awaiting_new_ticket_subject') {
-            $user->update(['bot_state' => 'awaiting_new_ticket_message|' . $text]);
+            $user->update(['bot_state' => 'awaiting_new_ticket_message|'.$text]);
             Telegram::sendMessage(['chat_id' => $chatId, 'text' => '✅ موضوع دریافت شد. حالا لطفاً متن کامل پیام خود را ارسال کنید:']);
         }
         // وضعیت گرفتن متن پیام تیکت جدید
@@ -796,13 +849,13 @@ class WebhookController extends Controller
             $user->update(['bot_state' => null]);
 
             $closeKeyboard = Keyboard::make()->inline()->row([
-                Keyboard::inlineButton(['text' => '❌ بستن تیکت', 'callback_data' => 'close_ticket_' . $ticket->id])
+                Keyboard::inlineButton(['text' => '❌ بستن تیکت', 'callback_data' => 'close_ticket_'.$ticket->id]),
             ]);
 
             Telegram::sendMessage([
                 'chat_id' => $chatId,
                 'text' => '✅ تیکت شما با موفقیت ثبت شد و به زودی بررسی خواهد شد.',
-                'reply_markup' => $closeKeyboard
+                'reply_markup' => $closeKeyboard,
             ]);
 
             $adminChatId = $this->settings->get('telegram_admin_chat_id');
@@ -814,33 +867,34 @@ class WebhookController extends Controller
 
     /**
      * شروع فرآیند خرید (انتخاب روش پرداخت).
-     * @param User $user
-     * @param int $planId
+     *
+     * @param  User  $user
+     * @param  int  $planId
      */
     protected function startPurchaseProcess($user, $planId)
     {
         $plan = Plan::find($planId);
-        if (!$user || !$plan) return;
+        if (! $user || ! $plan) {
+            return;
+        }
 
         $balance = $user->balance ?? 0;
 
-        $message = "شما در حال خرید پلن *{$plan->name}* به قیمت *" . number_format($plan->price) . " تومان* هستید.\n";
-        $message .= "موجودی کیف پول شما: *" . number_format($balance) . " تومان*\n\n";
-        $message .= "لطفاً روش پرداخت خود را انتخاب کنید:";
+        $message = "شما در حال خرید پلن *{$plan->name}* به قیمت *".number_format($plan->price)." تومان* هستید.\n";
+        $message .= 'موجودی کیف پول شما: *'.number_format($balance)." تومان*\n\n";
+        $message .= 'لطفاً روش پرداخت خود را انتخاب کنید:';
 
         $keyboard = Keyboard::make()->inline();
-
 
         if ($balance >= $plan->price) {
             $keyboard->row([Keyboard::inlineButton(['text' => '✅ پرداخت با کیف پول (فعالسازی آنی)', 'callback_data' => "pay_wallet_{$plan->id}"])]);
         }
 
-
         $order = $user->orders()->create([
             'plan_id' => $plan->id,
             'status' => 'pending',
             'source' => 'telegram',
-            'amount' => $plan->price
+            'amount' => $plan->price,
         ]);
 
         $keyboard->row([Keyboard::inlineButton(['text' => '💳 کارت به کارت (نیاز به تایید)', 'callback_data' => "pay_card_{$order->id}"])]);
@@ -851,44 +905,47 @@ class WebhookController extends Controller
 
     /**
      * ارسال اطلاعات کارت به کارت و درخواست رسید.
-     * @param int $chatId
-     * @param int $orderId
+     *
+     * @param  int  $chatId
+     * @param  int  $orderId
      */
     protected function sendCardPaymentInfo($chatId, $orderId)
     {
         $user = User::where('telegram_chat_id', $chatId)->first();
         $order = Order::find($orderId);
 
-        if(!$user || !$order || $order->user_id !== $user->id) {
+        if (! $user || ! $order || $order->user_id !== $user->id) {
             Telegram::sendMessage(['chat_id' => $chatId, 'text' => '❌ خطای سیستم: سفارش یافت نشد.']);
+
             return;
         }
 
         // تنظیم وضعیت کاربر برای انتظار دریافت عکس رسید
-        $user->update(['bot_state' => 'waiting_receipt_' . $orderId]);
-
+        $user->update(['bot_state' => 'waiting_receipt_'.$orderId]);
 
         $cardNumber = $this->settings->get('payment_card_number', 'شماره کارتی یافت نشد');
         $cardHolder = $this->settings->get('payment_card_holder_name', 'صاحب حسابی یافت نشد');
         $amountToPay = number_format($order->amount);
 
-        $message = "لطفاً مبلغ *" . $amountToPay . " تومان* را به کارت زیر واریز نمایید:\n\n";
-        $message .= "💳 شماره کارت: `" . $cardNumber . "`\n";
-        $message .= "👤 نام صاحب حساب: *" . $cardHolder . "*\n";
-        $message .= "🔔 توجه: فقط مبلغ *" . $amountToPay . " تومان* را واریز کنید.\n\n";
-        $message .= "🔴 **سپس فقط عکس رسید واریزی (عکس از صفحه اپلیکیشن بانکی یا عابربانک) را در همین چت ارسال کنید.**";
+        $message = 'لطفاً مبلغ *'.$amountToPay." تومان* را به کارت زیر واریز نمایید:\n\n";
+        $message .= '💳 شماره کارت: `'.$cardNumber."`\n";
+        $message .= '👤 نام صاحب حساب: *'.$cardHolder."*\n";
+        $message .= '🔔 توجه: فقط مبلغ *'.$amountToPay." تومان* را واریز کنید.\n\n";
+        $message .= '🔴 **سپس فقط عکس رسید واریزی (عکس از صفحه اپلیکیشن بانکی یا عابربانک) را در همین چت ارسال کنید.**';
         Telegram::sendMessage(['chat_id' => $chatId, 'text' => $message, 'parse_mode' => 'Markdown']);
     }
 
     /**
      * ارسال لیست پلن‌های فعال.
-     * @param int $chatId
+     *
+     * @param  int  $chatId
      */
     protected function sendPlans($chatId)
     {
         $plans = Plan::where('is_active', true)->orderBy('price')->get();
         if ($plans->isEmpty()) {
             Telegram::sendMessage(['chat_id' => $chatId, 'text' => 'متاسفانه در حال حاضر هیچ پلن فعالی وجود ندارد.']);
+
             return;
         }
 
@@ -897,9 +954,9 @@ class WebhookController extends Controller
         foreach ($plans as $plan) {
             $message .= "--------------------------------------\n";
             $message .= "💎 *{$plan->name}*\n";
-            $message .= "📊 حجم: *{$plan->data_limit_gb} گیگ*\n";
+            $message .= "📊 حجم: *{$plan->volume_gb} گیگ*\n";
             $message .= "🗓️ مدت: *{$plan->duration_days} روز*\n";
-            $message .= "💰 قیمت: *" . number_format($plan->price) . " تومان*\n";
+            $message .= '💰 قیمت: *'.number_format($plan->price)." تومان*\n";
             $message .= "--------------------------------------\n";
 
             $keyboard->row([Keyboard::inlineButton(['text' => "🛒 خرید پلن {$plan->name}", 'callback_data' => "buy_plan_{$plan->id}"])]);
@@ -908,8 +965,8 @@ class WebhookController extends Controller
         $keyboard->row([
             \Telegram\Bot\Keyboard\Keyboard::inlineButton([
                 'text' => '⬅️ بازگشت به منوی اصلی',
-                'callback_data' => '/start'
-            ])
+                'callback_data' => '/start',
+            ]),
         ]);
 
         Telegram::sendMessage(['chat_id' => $chatId, 'text' => $message, 'parse_mode' => 'Markdown', 'reply_markup' => $keyboard]);
@@ -917,7 +974,8 @@ class WebhookController extends Controller
 
     /**
      * نمایش سرویس‌های فعال کاربر.
-     * @param User $user
+     *
+     * @param  User  $user
      */
     protected function sendMyServices($user)
     {
@@ -931,13 +989,16 @@ class WebhookController extends Controller
 
         if ($activeOrders->isEmpty()) {
             Telegram::sendMessage(['chat_id' => $user->telegram_chat_id, 'text' => 'شما در حال حاضر هیچ سرویس فعالی ندارید.']);
+
             return;
         }
 
         $message = "لیست سرویس‌های فعال شما:\n\n";
 
         foreach ($activeOrders as $order) {
-            if (!$order->plan) continue;
+            if (! $order->plan) {
+                continue;
+            }
 
             $expiresAt = Carbon::parse($order->expires_at);
 
@@ -946,22 +1007,22 @@ class WebhookController extends Controller
             $daysRemaining = floor(now()->diffInDays($expiresAt, false));
             // --- پایان تغییر کلیدی ---
 
-            $remainingText = "";
+            $remainingText = '';
             if ($daysRemaining > 0) {
                 $remainingText = "(*{$daysRemaining} روز باقی‌مانده*)";
             } elseif ($daysRemaining == 0) {
-                $remainingText = "(*کمتر از یک روز باقی‌مانده*)"; // متن را برای حالت صفر بهبود می‌دهیم
+                $remainingText = '(*کمتر از یک روز باقی‌مانده*)'; // متن را برای حالت صفر بهبود می‌دهیم
             } else {
                 // این حالت با کوئری where('expires_at', '>', now()) رخ نمی‌دهد، اما برای اطمینان باقی می‌ماند
-                $remainingText = "(*منقضی شده*)";
+                $remainingText = '(*منقضی شده*)';
             }
 
             $message .= "--------------------------------------\n";
             $message .= "💎 *{$order->plan->name}*\n";
-            $message .= "🗓️ تاریخ انقضا: *" . $expiresAt->format('Y/m/d') . "* " . $remainingText . "\n";
+            $message .= '🗓️ تاریخ انقضا: *'.$expiresAt->format('Y/m/d').'* '.$remainingText."\n";
             $message .= "📦 حجم کل: *{$order->plan->volume_gb} گیگابایت*\n";
 
-            if (!empty($order->config_details)) {
+            if (! empty($order->config_details)) {
                 $message .= "🔗 *لینک اتصال:*\n`{$order->config_details}`\n";
             } else {
                 $message .= "⚠️ کانفیگ در حال آماده‌سازی است. لطفاً کمی صبر کنید یا با پشتیبانی تماس بگیرید.\n";
@@ -971,18 +1032,20 @@ class WebhookController extends Controller
         $message .= "\nبرای مدیریت سرویس‌ها و مشاهده میزان مصرف، از پنل کاربری خود نیز می‌توانید استفاده کنید.";
 
         $keyboard = Keyboard::make()->inline()->row([
-            Keyboard::inlineButton(['text' => '⬅️ بازگشت به منوی اصلی', 'callback_data' => '/start'])
+            Keyboard::inlineButton(['text' => '⬅️ بازگشت به منوی اصلی', 'callback_data' => '/start']),
         ]);
 
         Telegram::sendMessage([
             'chat_id' => $user->telegram_chat_id,
             'text' => $message,
             'parse_mode' => 'Markdown',
-            'reply_markup' => $keyboard
+            'reply_markup' => $keyboard,
         ]);
     }
+
     /**
      * تولید کیبورد اصلی ربات (منوی اصلی).
+     *
      * @return Keyboard
      */
     protected function getMainMenuKeyboard()
@@ -990,39 +1053,40 @@ class WebhookController extends Controller
         return Keyboard::make()->inline()
             ->row([
                 Keyboard::inlineButton(['text' => '🛒 خرید سرویس جدید', 'callback_data' => '/plans']),
-                Keyboard::inlineButton(['text' => '🛠 سرویس‌های من', 'callback_data' => '/my_services'])
+                Keyboard::inlineButton(['text' => '🛠 سرویس‌های من', 'callback_data' => '/my_services']),
             ])
             ->row([
                 Keyboard::inlineButton(['text' => '💰 کیف پول و شارژ حساب', 'callback_data' => '/wallet']),
-                Keyboard::inlineButton(['text' => '📚 آموزش اتصال', 'callback_data' => '/tutorials'])
+                Keyboard::inlineButton(['text' => '📚 آموزش اتصال', 'callback_data' => '/tutorials']),
             ])
             ->row([
-                Keyboard::inlineButton(['text' => '💬 پشتیبانی (تیکت)', 'callback_data' => '/support'])
+                Keyboard::inlineButton(['text' => '💬 پشتیبانی (تیکت)', 'callback_data' => '/support']),
             ]);
     }
 
     /**
      * ارسال محتوای آموزشی بر اساس پلتفرم.
-     * @param string $platform
-     * @param int $chatId
+     *
+     * @param  string  $platform
+     * @param  int  $chatId
      */
     protected function sendTutorial($platform, $chatId)
     {
         $tutorials = [
             'android' => [
-                'title' => "راهنمای اتصال اندروید 📱",
-                'text' => "برای اتصال در اندروید، اپلیکیشن *V2RayNG* را نصب کنید. لینک کانفیگ خود را کپی کرده و در این برنامه وارد نمایید. (آموزش کامل به زودی در وب‌سایت قرار می‌گیرد.)",
-                'app_link' => "https://play.google.com/store/apps/details?id=com.v2ray.android"
+                'title' => 'راهنمای اتصال اندروید 📱',
+                'text' => 'برای اتصال در اندروید، اپلیکیشن *V2RayNG* را نصب کنید. لینک کانفیگ خود را کپی کرده و در این برنامه وارد نمایید. (آموزش کامل به زودی در وب‌سایت قرار می‌گیرد.)',
+                'app_link' => 'https://play.google.com/store/apps/details?id=com.v2ray.android',
             ],
             'ios' => [
-                'title' => "راهنمای اتصال آیفون/آیپد 🍏",
-                'text' => "برای اتصال در iOS، اپلیکیشن *Fair VPN* یا *Streisand* را نصب کنید. سپس لینک سابسکریپشن خود را در آن وارد نمایید.",
-                'app_link' => "https://apps.apple.com/us/app/fair-vpn/id6446860086"
+                'title' => 'راهنمای اتصال آیفون/آیپد 🍏',
+                'text' => 'برای اتصال در iOS، اپلیکیشن *Fair VPN* یا *Streisand* را نصب کنید. سپس لینک سابسکریپشن خود را در آن وارد نمایید.',
+                'app_link' => 'https://apps.apple.com/us/app/fair-vpn/id6446860086',
             ],
             'windows' => [
-                'title' => "راهنمای اتصال ویندوز 💻",
-                'text' => "برای اتصال در ویندوز، نرم‌افزار *V2RayN* را دانلود و نصب کنید. لینک کانفیگ را کپی کرده و در برنامه اضافه کنید.",
-                'app_link' => "لینک دانلود V2RayN از گیت‌هاب"
+                'title' => 'راهنمای اتصال ویندوز 💻',
+                'text' => 'برای اتصال در ویندوز، نرم‌افزار *V2RayN* را دانلود و نصب کنید. لینک کانفیگ را کپی کرده و در برنامه اضافه کنید.',
+                'app_link' => 'لینک دانلود V2RayN از گیت‌هاب',
             ],
         ];
 
@@ -1042,7 +1106,8 @@ class WebhookController extends Controller
 
     /**
      * نمایش 5 تراکنش آخر کاربر.
-     * @param User $user
+     *
+     * @param  User  $user
      */
     protected function sendTransactions($user)
     {
@@ -1050,18 +1115,18 @@ class WebhookController extends Controller
         $transactions = $user->transactions()->orderBy('created_at', 'desc')->take(5)->get();
 
         if ($transactions->isEmpty()) {
-            $message = "📜 تاریخچه تراکنش‌های شما خالی است.";
+            $message = '📜 تاریخچه تراکنش‌های شما خالی است.';
         } else {
             $message = "📜 *۵ تراکنش اخیر شما:*\n\n";
             foreach ($transactions as $transaction) {
                 $status = $transaction->status === 'completed' ? '✅ موفق' : '⚠️ در انتظار';
                 $type = $transaction->type === 'deposit' ? '💰 شارژ' : '🛒 خرید';
                 $message .= "--------------------------------------\n";
-                $message .= "💸 مبلغ: *" . number_format($transaction->amount) . " تومان*\n";
+                $message .= '💸 مبلغ: *'.number_format($transaction->amount)." تومان*\n";
                 $message .= "🏷 نوع: *{$type}*\n";
                 $message .= "وضعیت: *{$status}*\n";
                 $message .= "توضیحات: {$transaction->description}\n";
-                $message .= "تاریخ: " . Carbon::parse($transaction->created_at)->format('Y/m/d H:i');
+                $message .= 'تاریخ: '.Carbon::parse($transaction->created_at)->format('Y/m/d H:i');
             }
         }
 

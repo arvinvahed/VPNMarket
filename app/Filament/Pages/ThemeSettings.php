@@ -43,14 +43,7 @@ class ThemeSettings extends Page implements HasForms
         $settings = Setting::all()->pluck('value', 'key')->toArray();
 
 
-        $defaultData = [
-            'panel_type' => 'marzban',
-            'xui_host' => null,
-            'xui_user' => null,
-            'xui_pass' => null,
-            'xui_default_inbound_id' => null,
-            'xui_link_type' => 'single',
-        ];
+        $defaultData = [];
 
 
         $this->data = array_merge($defaultData, $settings);
@@ -197,33 +190,6 @@ class ThemeSettings extends Page implements HasForms
                             TextInput::make('auth_register_submit_button')->label('متن دکمه ثبت‌نام'),
                             TextInput::make('auth_register_login_link')->label('متن لینک ورود'),
                         ])->columns(2),
-                    ]),
-
-                    Tabs\Tab::make('تنظیمات پنل V2Ray')->icon('heroicon-o-server-stack')->schema([
-
-                        Radio::make('panel_type')->label('نوع پنل')->options(['marzban' => 'مرزبان', 'xui' => 'سنایی / X-UI'])->live()->required(),
-                        Section::make('تنظیمات پنل مرزبان')->visible(fn (Get $get) => $get('panel_type') === 'marzban')->schema([
-                            TextInput::make('marzban_host')->label('آدرس پنل مرزبان')->required(),
-                            TextInput::make('marzban_sudo_username')->label('نام کاربری ادمین')->required(),
-                            TextInput::make('marzban_sudo_password')->label('رمز عبور ادمین')->password()->required(),
-                            TextInput::make('marzban_node_hostname')->label('آدرس دامنه/سرور برای کانفیگ')->required(),
-                        ]),
-                        Section::make('تنظیمات پنل سنایی / X-UI')
-                            ->visible(fn(Get $get) => $get('panel_type') === 'xui')
-                            ->schema([
-
-                                TextInput::make('xui_host')->label('آدرس کامل پنل سنایی')
-                                    ->required(fn(Get $get): bool => $get('panel_type') === 'xui'),
-                                TextInput::make('xui_user')->label('نام کاربری')
-                                    ->required(fn(Get $get): bool => $get('panel_type') === 'xui'),
-                                TextInput::make('xui_pass')->label('رمز عبور')->password()
-                                    ->required(fn(Get $get): bool => $get('panel_type') === 'xui'),
-                                Select::make('xui_default_inbound_id')->label('اینباند پیش‌فرض')->options(fn () => Inbound::all()->pluck('title', 'id'))->searchable()
-                                    ->required(fn(Get $get): bool => $get('panel_type') === 'xui'), // اعتبارسنجی شرطی
-                                Radio::make('xui_link_type')->label('نوع لینک تحویلی')->options(['single' => 'لینک تکی', 'subscription' => 'لینک سابسکریپشن'])->default('single')
-                                    ->required(fn(Get $get): bool => $get('panel_type') === 'xui'),
-                                TextInput::make('xui_subscription_url_base')->label('آدرس پایه لینک سابسکریپشن'),
-                            ]),
                     ]),
 
                     Tabs\Tab::make('تنظیمات پرداخت')->icon('heroicon-o-credit-card')->schema([

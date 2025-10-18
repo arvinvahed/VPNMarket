@@ -20,6 +20,11 @@
                         <p>{{ session('error') }}</p>
                     </div>
                 @endif
+                @if (session('success'))
+                    <div class="bg-green-100 border-l-4 border-green-500 text-green-700 p-4 rounded-xl">
+                        <p>{{ session('success') }}</p>
+                    </div>
+                @endif
 
 
                 <div>
@@ -37,14 +42,70 @@
                                 @endif
                             </span>
                         </div>
+                        
+                        @if ($order->promo_code_id && $order->promoCode)
+                            <div class="flex justify-between items-center">
+                                <span class="text-gray-500 dark:text-gray-400">مبلغ اولیه:</span>
+                                <span class="text-gray-600 dark:text-gray-400 line-through">
+                                    {{ number_format($order->original_amount) }} تومان
+                                </span>
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <span class="text-gray-500 dark:text-gray-400">کد تخفیف ({{ $order->promoCode->code }}):</span>
+                                <span class="text-red-500 font-semibold">
+                                    - {{ number_format($order->discount_amount) }} تومان
+                                </span>
+                            </div>
+                        @endif
+                        
                         <div class="flex justify-between items-center">
                             <span class="text-gray-500 dark:text-gray-400">مبلغ قابل پرداخت:</span>
                             <span class="font-bold text-lg text-green-500">
-                                {{ number_format($order->plan->price ?? $order->amount) }} تومان
+                                {{ number_format($order->amount ?? $order->plan->price) }} تومان
                             </span>
                         </div>
                     </div>
                 </div>
+
+                {{-- Coupon Code Section --}}
+                @if ($order->plan)
+                <div class="bg-gradient-to-r from-purple-50 to-blue-50 dark:from-purple-900/20 dark:to-blue-900/20 p-6 rounded-lg">
+                    <h3 class="text-lg font-medium text-gray-900 dark:text-gray-100 text-right mb-4">
+                        کد تخفیف دارید؟
+                    </h3>
+                    
+                    @if ($order->promo_code_id && $order->promoCode)
+                        <div class="flex items-center justify-between bg-white dark:bg-gray-800 p-4 rounded-lg">
+                            <div class="text-right">
+                                <p class="text-sm text-gray-600 dark:text-gray-400">کد تخفیف فعال:</p>
+                                <p class="font-bold text-purple-600 dark:text-purple-400 text-lg">{{ $order->promoCode->code }}</p>
+                            </div>
+                            <form method="POST" action="{{ route('order.remove-coupon', $order->id) }}">
+                                @csrf
+                                <button type="submit" class="px-4 py-2 bg-red-100 hover:bg-red-200 dark:bg-red-900/30 dark:hover:bg-red-900/50 text-red-700 dark:text-red-400 rounded-lg transition">
+                                    حذف کد تخفیف
+                                </button>
+                            </form>
+                        </div>
+                    @else
+                        <form method="POST" action="{{ route('order.apply-coupon', $order->id) }}" class="flex gap-3">
+                            @csrf
+                            <input type="text" 
+                                   name="coupon_code" 
+                                   placeholder="کد تخفیف خود را وارد کنید"
+                                   class="flex-1 px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-purple-500 dark:bg-gray-700 dark:text-gray-100 text-right"
+                                   required>
+                            <button type="submit" 
+                                    class="px-6 py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition font-semibold">
+                                اعمال
+                            </button>
+                        </form>
+                        <p class="text-xs text-gray-500 dark:text-gray-400 mt-2 text-right">
+                            کد تخفیف خود را وارد کرده و روی دکمه اعمال کلیک کنید
+                        </p>
+                    @endif
+                </div>
+                @endif
 
 
                 <div>
@@ -57,20 +118,23 @@
                         @if ($order->plan)
                         <form method="POST" action="{{ route('payment.wallet.process', $order->id) }}">
                             @csrf
+                            @php
+                                $finalPrice = $order->amount ?? $order->plan->price;
+                            @endphp
                             <button type="submit"
                                     class="w-full text-center p-6 border-2 rounded-lg transition dark:border-gray-600
-                                               @if($order->plan->price > auth()->user()->balance)
+                                               @if($finalPrice > auth()->user()->balance)
                                                    border-red-400 cursor-not-allowed bg-red-50 dark:bg-red-900/20
                                                @else
                                                    hover:border-purple-500 dark:hover:border-purple-500
                                                @endif"
-                                    @if($order->plan->price > auth()->user()->balance) disabled @endif>
+                                    @if($finalPrice > auth()->user()->balance) disabled @endif>
 
                                 <h4 class="font-bold text-gray-900 dark:text-gray-100">پرداخت از کیف پول (آنی)</h4>
                                 <p class="text-sm text-gray-600 dark:text-gray-400 mt-2">
                                     موجودی شما: {{ number_format(auth()->user()->balance) }} تومان
                                 </p>
-                                @if ($order->plan->price > auth()->user()->balance)
+                                @if ($finalPrice > auth()->user()->balance)
                                     <p class="text-xs font-semibold text-red-500 mt-2">موجودی کافی نیست</p>
                                 @endif
                             </button>

@@ -64,6 +64,10 @@ Route::middleware(['auth'])->group(function () {
 
     Route::post('/payment/crypto/{order}', [OrderController::class, 'processCryptoPayment'])->name('payment.crypto.process');
     Route::post('/payment/wallet/{order}', [OrderController::class, 'processWalletPayment'])->name('payment.wallet.process');
+
+    // Coupon routes
+    Route::post('/order/{order}/apply-coupon', [OrderController::class, 'applyCoupon'])->name('order.apply-coupon');
+    Route::post('/order/{order}/remove-coupon', [OrderController::class, 'removeCoupon'])->name('order.remove-coupon');
 });
 
 Route::post('/webhooks/nowpayments', [NowPaymentsWebhookController::class, 'handle'])->name('webhooks.nowpayments');

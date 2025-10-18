@@ -17,11 +17,22 @@ class Plan extends Model
         'is_popular',
         'is_active',
         'volume_gb',
-        'duration_days'
+        'duration_days',
+        'panel_id',
+        'marzneshin_service_ids',
+    ];
+
+    protected $casts = [
+        'marzneshin_service_ids' => 'array',
     ];
 
     public function orders()
     {
         return $this->hasMany(Order::class);
+    }
+
+    public function panel()
+    {
+        return $this->belongsTo(Panel::class);
     }
 }
