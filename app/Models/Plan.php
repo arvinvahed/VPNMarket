@@ -24,4 +24,9 @@ class Plan extends Model
     {
         return $this->hasMany(Order::class);
     }
+
+    public function transactions()
+    {
+        return $this->hasMany(Transaction::class);
+    }
 }

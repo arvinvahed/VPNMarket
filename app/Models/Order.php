@@ -31,4 +31,9 @@ class Order extends Model
 
         return view('payment.choose', ['plan' => $plan]);
     }
+
+    public function transactions()
+    {
+        return $this->hasMany(Transaction::class);
+    }
 }

@@ -23,7 +23,7 @@ class TicketResource extends Resource
 
     public static function canViewAny(): bool
     {
-         return Module::isEnabled('Ticketing');
+        return Module::isEnabled('Ticketing');
     }
 
 
@@ -81,18 +81,18 @@ class TicketResource extends Resource
                 Tables\Columns\TextColumn::make('subject')
                     ->label('موضوع')
                     ->limit(40)
-                    ->tooltip(fn (Ticket $record): string => $record->subject),
+                    ->tooltip(fn(Ticket $record): string => $record->subject),
 
                 Tables\Columns\TextColumn::make('status')
                     ->label('وضعیت')
                     ->badge()
-                    ->color(fn (string $state): string => match ($state) {
+                    ->color(fn(string $state): string => match ($state) {
                         'open' => 'warning',
                         'answered' => 'success',
                         'closed' => 'gray',
                         default => 'gray',
                     })
-                    ->formatStateUsing(fn (string $state): string => match ($state) {
+                    ->formatStateUsing(fn(string $state): string => match ($state) {
                         'open' => 'باز',
                         'answered' => 'پاسخ داده شده',
                         'closed' => 'بسته شده',
@@ -101,12 +101,12 @@ class TicketResource extends Resource
 
                 Tables\Columns\IconColumn::make('source')
                     ->label('منبع')
-                    ->icon(fn (string $state): string => match ($state) {
+                    ->icon(fn(string $state): string => match ($state) {
                         'web' => 'heroicon-o-globe-alt',
                         'telegram' => 'heroicon-o-paper-airplane',
                         default => 'heroicon-o-question-mark-circle',
                     })
-                    ->color(fn (string $state): string => match ($state) {
+                    ->color(fn(string $state): string => match ($state) {
                         'web' => 'primary',
                         'telegram' => 'info',
                         default => 'gray',
@@ -115,13 +115,13 @@ class TicketResource extends Resource
                 Tables\Columns\TextColumn::make('priority')
                     ->label('اولویت')
                     ->badge()
-                    ->color(fn (string $state): string => match ($state) {
+                    ->color(fn(string $state): string => match ($state) {
                         'low' => 'info',
                         'medium' => 'warning',
                         'high' => 'danger',
                         default => 'gray',
                     })
-                    ->formatStateUsing(fn (string $state): string => match ($state) {
+                    ->formatStateUsing(fn(string $state): string => match ($state) {
                         'low' => 'پایین',
                         'medium' => 'متوسط',
                         'high' => 'بالا',

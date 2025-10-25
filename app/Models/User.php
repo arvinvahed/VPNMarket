@@ -2,12 +2,12 @@
 
 namespace App\Models;
 
-// use Illuminate\Contracts\Auth\MustVerifyEmail;
+use Illuminate\Notifications\Notifiable;
 use Filament\Models\Contracts\FilamentUser;
 use Filament\Panel;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
-use Illuminate\Notifications\Notifiable;
+
 use Modules\Ticketing\Models\Ticket;
 
 class User extends Authenticatable implements FilamentUser
@@ -28,6 +28,8 @@ class User extends Authenticatable implements FilamentUser
         'bot_state',
         'telegram_chat_id',
         'balance',
+        'referrer_id',
+        'referral_code',
     ];
 
     /**
@@ -71,4 +73,20 @@ class User extends Authenticatable implements FilamentUser
     {
         return $this->hasMany(Ticket::class);
     }
+
+    public function transactions()
+    {
+        return $this->hasMany(Transaction::class);
+    }
+    public function notifications()
+    {
+
+        return $this->hasMany(Notification::class);
+    }
+    public function unreadNotifications()
+    {
+        return $this->hasMany(Notification::class)->where('is_read', false)->latest();
+    }
+
+
 }

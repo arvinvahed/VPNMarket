@@ -3,32 +3,20 @@
 namespace Modules\Ticketing\Providers;
 
 use Illuminate\Foundation\Support\Providers\EventServiceProvider as ServiceProvider;
+use Modules\Ticketing\Events\TicketReplied;
+use Modules\TelegramBot\Listeners\SendTelegramReplyNotification;
 
 class EventServiceProvider extends ServiceProvider
 {
-    /**
-     * The event handler mappings for the application.
-     *
-     * @var array<string, array<int, string>>
-     */
-
-
     protected $listen = [
-        \Modules\Ticketing\Events\TicketReplied::class => [
-         \Modules\TelegramBot\Listeners\SendTicketReplyToTelegram::class,
+        // فقط این قسمت باید اینجا باشد
+        TicketReplied::class => [
+            SendTelegramReplyNotification::class,
         ],
     ];
 
-
-    /**
-     * Indicates if events should be discovered.
-     *
-     * @var bool
-     */
-    protected static $shouldDiscoverEvents = true;
-
-    /**
-     * Configure the proper event listeners for email verification.
-     */
-    protected function configureEmailVerification(): void {}
+    public function boot(): void
+    {
+        parent::boot();
+    }
 }

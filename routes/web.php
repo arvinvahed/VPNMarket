@@ -31,6 +31,40 @@ Route::get('/', function () {
 
 
 Route::middleware(['auth'])->group(function () {
+
+
+    Route::prefix('notifications')->name('notifications.')->group(function () {
+        Route::get('/', function () {
+            $notifications = Auth::user()->notifications()->paginate(15);
+            return view('notifications.index', compact('notifications'));
+        })->name('index');
+
+        Route::post('/{notification}/mark-as-read', function (App\Models\Notification $notification) {
+            if ($notification->user_id !== Auth::id()) {
+                abort(403);
+            }
+            $notification->update(['is_read' => true]);
+            return response()->json(['success' => true]);
+        })->name('mark-as-read');
+
+        Route::post('/mark-all-as-read', function () {
+
+            Auth::user()->unreadNotifications()->update(['is_read' => true]);
+            Auth::user()->refresh();
+            return response()->json(['success' => true]);
+
+        })->name('mark-all-as-read');
+
+        Route::delete('/{notification}', function (App\Models\Notification $notification) {
+            if ($notification->user_id !== Auth::id()) {
+                abort(403);
+            }
+            $notification->delete();
+            return response()->json(['success' => true]);
+        })->name('destroy');
+    });
+
+
     // Dashboard
     Route::get('/dashboard', function () {
         $user = Auth::user();

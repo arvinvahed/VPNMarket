@@ -8,6 +8,7 @@ use App\Models\Inbound;
 use App\Models\Order;
 use App\Models\Setting;
 use App\Models\Transaction;
+use App\Models\Notification as UserNotification;
 use App\Services\MarzbanService;
 use App\Services\XUIService;
 use Filament\Forms;
@@ -78,6 +79,14 @@ class OrderResource extends Resource
                                 $order->update(['status' => 'paid']);
                                 $user->increment('balance', $order->amount);
                                 Transaction::create(['user_id' => $user->id, 'order_id' => $order->id, 'amount' => $order->amount, 'type' => 'deposit', 'status' => 'completed', 'description' => "شارژ کیف پول (تایید دستی فیش)"]);
+                                $user->notifications()->create([
+                                    'type' => 'wallet_charged_approved',
+                                    'title' => 'کیف پول شما شارژ شد!',
+                                    'message' => "مبلغ " . number_format($order->amount) . " تومان با موفقیت به کیف پول شما اضافه شد.",
+                                    'link' => route('dashboard', ['tab' => 'order_history']),
+                                ]);
+
+
                                 Notification::make()->title('کیف پول کاربر با موفقیت شارژ شد.')->success()->send();
 
 
@@ -175,6 +184,13 @@ class OrderResource extends Resource
                                 }
                             } else {
                                 Notification::make()->title('خطا')->body('نوع پنل در تنظیمات مشخص نشده است.')->danger()->send();
+
+                                $user->notifications()->create([
+                                    'type' => 'panel_type_error_admin',
+                                    'title' => 'خطا در فعال‌سازی سرویس!',
+                                    'message' => "نوع پنل در تنظیمات سیستم به درستی مشخص نشده است. لطفاً به پشتیبانی اطلاع دهید.",
+                                    'link' => route('dashboard', ['tab' => 'support']),
+                                ]);
                                 return;
                             }
 
@@ -182,8 +198,21 @@ class OrderResource extends Resource
                                 if($isRenewal) {
                                     $originalOrder->update(['config_details' => $finalConfig, 'expires_at' => $newExpiresAt->format('Y-m-d H:i:s')]);
                                     $user->update(['show_renewal_notification' => true]);
+
+                                    $user->notifications()->create([
+                                        'type' => 'service_renewed_admin',
+                                        'title' => 'سرویس شما تمدید شد!',
+                                        'message' => "تمدید سرویس {$originalOrder->plan->name} توسط مدیر تایید و فعال شد. لطفاً لینک اشتراک خود را به‌روزرسانی کنید.",
+                                        'link' => route('dashboard', ['tab' => 'my_services']),
+                                    ]);
                                 } else {
                                     $order->update(['config_details' => $finalConfig, 'expires_at' => $newExpiresAt]);
+                                    $user->notifications()->create([
+                                        'type' => 'service_activated_admin',
+                                        'title' => 'سرویس شما فعال شد!',
+                                        'message' => "خرید سرویس {$plan->name} توسط مدیر تایید و فعال شد.",
+                                        'link' => route('dashboard', ['tab' => 'my_services']),
+                                    ]);
                                 }
 
                                 $order->update(['status' => 'paid']);

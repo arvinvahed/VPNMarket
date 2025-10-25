@@ -47,6 +47,9 @@ export DEBIAN_FRONTEND=noninteractive
 sudo apt-get update -y
 sudo apt-get install -y git curl composer unzip software-properties-common gpg nodejs nginx certbot python3-certbot-nginx mysql-server redis-server supervisor ufw
 
+sudo apt-get install -y nodejs npm
+
+
 # --- مرحله ۲: نصب Node.js (فقط در صورت نیاز به نسخه جدیدتر) ---
 echo -e "${YELLOW}📦 مرحله ۲ از ۱۰: بررسی و نصب نسخه جدید Node.js...${NC}"
 if ! command -v node > /dev/null || [[ $(node -v | cut -d. -f1 | sed 's/v//') -lt 18 ]]; then
@@ -54,6 +57,8 @@ if ! command -v node > /dev/null || [[ $(node -v | cut -d. -f1 | sed 's/v//') -l
     curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
     sudo apt-get install -y nodejs
 fi
+
+
 echo -e "${GREEN}Node.js $(node -v) و npm $(npm -v) با موفقیت نصب شدند.${NC}"
 
 # --- مرحله ۳: نصب PHP 8.3 ---

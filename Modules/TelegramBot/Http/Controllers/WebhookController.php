@@ -9,6 +9,8 @@ use App\Services\XUIService;
 use App\Models\User;
 use App\Services\MarzbanService;
 use App\Models\Inbound;
+use Modules\Ticketing\Events\TicketCreated; // <-- use
+
 use Modules\Ticketing\Models\Ticket;
 use Illuminate\Routing\Controller;
 use Illuminate\Http\Request;
@@ -16,18 +18,20 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Hash;
 use Telegram\Bot\Laravel\Facades\Telegram;
-use App\Models\TelegramBotSetting;
 use App\Models\Transaction;
 use Illuminate\Support\Facades\DB;
 use Telegram\Bot\Keyboard\Keyboard;
 use Illuminate\Support\Str;
 use Carbon\Carbon;
+use Telegram\Bot\FileUpload\InputFile;
 
 class WebhookController extends Controller
 {
     protected $settings;
-    protected $botSettings;
 
+    //======================================================================
+    // 1. Core Handlers
+    //======================================================================
 
     public function handle(Request $request)
     {
@@ -35,12 +39,12 @@ class WebhookController extends Controller
 
         try {
             $this->settings = Setting::all()->pluck('value', 'key');
-            $this->botSettings = TelegramBotSetting::all()->pluck('value', 'key');
             $botToken = $this->settings->get('telegram_bot_token');
-
-            if (!$botToken) return 'ok';
+            if (!$botToken) {
+                Log::warning('Telegram bot token is not set.');
+                return response('ok', 200);
+            }
             Telegram::setAccessToken($botToken);
-
             $update = Telegram::getWebhookUpdate();
 
             if ($update->isType('callback_query')) {
@@ -56,627 +60,220 @@ class WebhookController extends Controller
         } catch (\Exception $e) {
             Log::error('Telegram Bot Error: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
         }
-        return 'ok';
+        return response('ok', 200);
     }
 
 
-
-    /**
-     * پردازش پیام‌های متنی ارسالی به ربات.
-     * @param $update
-     */
     protected function handleTextMessage($update)
     {
-
         $message = $update->getMessage();
         $chatId = $message->getChat()->getId();
-        $text = $message->getText() ?? '';
+        $text = trim($message->getText() ?? '');
         $user = User::where('telegram_chat_id', $chatId)->first();
-        $userFirstName = $message->getFrom()->getFirstName() ?? 'کاربر';
 
-
+        // --- بخش ایجاد کاربر جدید ---
         if (!$user) {
-                $password = Str::random(8);
-                $user = User::create([
-                    'name' => $userFirstName,
-                    'email' => $chatId . '@telegram.user',
-                    'password' => Hash::make($password),
-                    'telegram_chat_id' => $chatId,
-                ]);
+            $userFirstName = $message->getFrom()->getFirstName() ?? 'کاربر';
+            $password = Str::random(10);
+            $user = User::create([
+                'name' => $userFirstName,
+                'email' => $chatId . '@telegram.user',
+                'password' => Hash::make($password),
+                'telegram_chat_id' => $chatId,
+                'referral_code' => Str::random(8),
+            ]);
 
-                $welcomeMessage = "سلام *{$userFirstName}* عزیز به ربات ما خوش آمدید!\n\nیک حساب کاربری به صورت خودکار برای شما ایجاد شد:\n📧 **ایمیل:** `{$user->email}`\n🔑 **رمز عبور:** `{$password}`";
+            $welcomeMessage = "🌟 خوش آمدید {$userFirstName} عزیز!\n\nبرای شروع، یکی از گزینه‌های منو را انتخاب کنید:";
 
-                // بررسی وجود کد معرف در دستور /start
-                if (Str::startsWith($text, '/start ')) {
-                    $referralCode = Str::after($text, '/start ');
-                    $referrer = User::where('referral_code', $referralCode)->first();
+            if (Str::startsWith($text, '/start ')) {
+                $referralCode = Str::after($text, '/start ');
+                $referrer = User::where('referral_code', $referralCode)->first();
 
-                    if ($referrer) {
-                        $user->referrer_id = $referrer->id;
-                        $user->save();
-
-                        $welcomeGift = (int) $this->settings->get('referral_welcome_gift', 0);
-                        if ($welcomeGift > 0) {
-                            $user->increment('balance', $welcomeGift);
-                            $welcomeMessage .= "\n\n🎁 شما یک هدیه خوش‌آمدگویی به مبلغ *" . number_format($welcomeGift) . " تومان* دریافت کردید!";
-                        }
-
-                        if ($referrer->telegram_chat_id) {
-                            try {
-                                $referrerNotificationMessage = "👤 *خبر خوب!*\n\n";
-                                $referrerNotificationMessage .= "کاربر جدیدی با نام «{$userFirstName}» با لینک دعوت شما به ربات پیوست.\n\n";
-                                $referrerNotificationMessage .= "🎁 پاداش شما پس از اولین خرید موفق ایشان به کیف پولتان اضافه خواهد شد. به دعوت کردن ادامه دهید!";
-
-                                Telegram::sendMessage([
-                                    'chat_id' => $referrer->telegram_chat_id,
-                                    'text' => $referrerNotificationMessage,
-                                    'parse_mode' => 'Markdown'
-                                ]);
-                            } catch (\Exception $e) {
-                                Log::error("Failed to send referral notification to referrer {$referrer->id}: " . $e->getMessage());
-                            }
+                if ($referrer && $referrer->id !== $user->id) {
+                    $user->referrer_id = $referrer->id;
+                    $user->save();
+                    $welcomeGift = (int) $this->settings->get('referral_welcome_gift', 0);
+                    if ($welcomeGift > 0) {
+                        $user->increment('balance', $welcomeGift);
+                        $welcomeMessage .= "\n\n🎁 هدیه خوش‌آمدگویی: " . number_format($welcomeGift) . " تومان به کیف پول شما اضافه شد.";
+                    }
+                    if ($referrer->telegram_chat_id) {
+                        $referrerMessage = "👤 *خبر خوب!*\n\nکاربر جدیدی با نام «{$userFirstName}» با لینک دعوت شما به ربات پیوست.";
+                        try {
+                            Telegram::sendMessage(['chat_id' => $referrer->telegram_chat_id, 'text' => $this->escape($referrerMessage), 'parse_mode' => 'MarkdownV2']);
+                        } catch (\Exception $e) {
+                            Log::error("Failed to send referral notification: " . $e->getMessage());
                         }
                     }
                 }
-                Telegram::sendMessage(['chat_id' => $chatId, 'text' => $welcomeMessage, 'parse_mode' => 'Markdown', 'reply_markup' => $this->getReplyMainMenu()]);
-                return;
-        }
+            }
 
-        switch ($text) {
-            case '🛒 خرید سرویس': $this->sendPlans($chatId); return;
-            case '🛠 سرویس‌های من': $this->sendMyServices($user); return;
-            case '💰 کیف پول': $this->sendWalletMenu($user); return;
-            case '🎁 دعوت از دوستان': $this->sendReferralMenu($user); return;
-            case '💬 پشتیبانی': $this->showSupportMenu($user); return;
-            case '📚 راهنمای اتصال': $this->sendTutorialsMenu($chatId); return;
-        }
-
-        if ($user->bot_state === 'awaiting_deposit_amount') {
-            $this->processDepositAmount($user, $text);
-            return;
-        }
-
-        if ($user->bot_state && (Str::startsWith($user->bot_state, 'awaiting_new_ticket_') || Str::startsWith($user->bot_state, 'awaiting_ticket_reply'))) {
-            $this->processTicketConversation($user, $text, $update);
-            return;
-        }
-
-        if ($text === '/start') {
-            $user->update(['bot_state' => null]);
             Telegram::sendMessage([
                 'chat_id' => $chatId,
-                'text' => "سلام مجدد *{$user->name}*! لطفاً یکی از گزینه‌ها را از منوی پایین انتخاب کنید:",
-                'parse_mode' => 'Markdown',
+                'text' => $welcomeMessage,
                 'reply_markup' => $this->getReplyMainMenu()
             ]);
             return;
         }
 
-        Telegram::sendMessage([
-            'chat_id' => $chatId,
-            'text' => 'دستور شما نامفهوم است. لطفاً از دکمه‌های منوی پایین استفاده کنید.',
-            'reply_markup' => $this->getReplyMainMenu()
-        ]);
-    }
-
-
-
-    /**
-     * ایجاد اکانت کاربر در پنل سرویس‌دهنده (Marzban/XUI) و بازگرداندن لینک کانفیگ.
-     * @param Order $order
-     * @param Plan $plan
-     * @return string|null
-     */
-    protected function provisionUserAccount(Order $order, Plan $plan)
-    {
-        $settings = Setting::pluck('value', 'key')->toArray();
-        $configLink = null;
-
-        // مطمئن می‌شویم expires_at ست شده است.
-        if (!$order->expires_at) {
-            $order->update(['expires_at' => now()->addDays($plan->duration_days)]);
-        }
-
-        $expireTimestamp = $order->expires_at->timestamp;
-        $dataLimitBytes = $plan->data_limit_gb * 1073741824;
-        $uniqueUsername = "user-{$order->user_id}-order-{$order->id}";
-
-        try {
-            if (($settings['panel_type'] ?? 'marzban') === 'marzban') {
-                // ----------- اتصال به مرزبان -----------
-                $marzban = new MarzbanService(
-                    $settings['marzban_host'] ?? '',
-                    $settings['marzban_sudo_username'] ?? '',
-                    $settings['marzban_sudo_password'] ?? '',
-                    $settings['marzban_node_hostname'] ?? null
-                );
-
-                $response = $marzban->createUser([
-                    'username'   => $uniqueUsername,
-                    'expire'     => $expireTimestamp,
-                    'data_limit' => $dataLimitBytes,
-                ]);
-
-                if (!empty($response['subscription_url'])) {
-                    $configLink = $marzban->generateSubscriptionLink($response);
-                } else {
-                    Log::error('Marzban user creation failed.', $response);
-                }
-
-            } elseif (($settings['panel_type'] ?? 'marzban') === 'xui') {
-                // ----------- اتصال به سنایی/X-UI -----------
-
-                // 1. دریافت Inbound ID از تنظیمات. این همان عددی است که در XUIService استفاده می‌شود.
-                $inboundId = $settings['xui_default_inbound_id'] ?? null;
-                if (!$inboundId) {
-                    Log::error("XUI Inbound ID is not set in settings.");
-                    return null;
-                }
-
-                $xui = new XuiService(
-                    $settings['xui_host'] ?? '',
-                    $settings['xui_user'] ?? '',
-                    $settings['xui_pass'] ?? ''
-                );
-
-                // 2. محاسبات زمان (میلی‌ثانیه) و حجم (بایت)
-                // توجه: X-UI نیاز به expiryTime در میلی‌ثانیه دارد.
-                $expireTimeMs = $order->expires_at->timestamp * 1000;
-
-                $clientData = [
-                    'email' => $uniqueUsername,
-                    'expiryTime' => $expireTimeMs,
-                    'total' => $dataLimitBytes,
-                ];
-
-                // 3. افزودن کلاینت با Inbound ID صحیح
-                $response = $xui->addClient($inboundId, $clientData);
-
-                if ($response && isset($response['success']) && $response['success']) {
-
-                    // 4. تولید لینک کانفیگ یا سابسکریپشن (همانند Filament)
-                    $inbound = Inbound::find($inboundId);
-                    if ($inbound && $inbound->inbound_data) {
-                        $inboundData = json_decode($inbound->inbound_data, true);
-
-                        $linkType = $settings['xui_link_type'] ?? 'single';
-                        if ($linkType === 'subscription') {
-                            $subId = $response['generated_subId'] ?? null;
-                            $subBaseUrl = rtrim($settings['xui_subscription_url_base'] ?? '', '/');
-                            if ($subId && $subBaseUrl) {
-                                $configLink = $subBaseUrl . '/sub/' . $subId; // برخی پنل‌ها از sub/ و برخی از json/ استفاده می‌کنند.
-                            }
-                        } else {
-                            $uuid = $response['generated_uuid'] ?? null;
-                            if ($uuid) {
-                                // ساخت لینک تکی VLESS (بر اساس منطق موجود در OrderResource)
-                                $streamSettings = json_decode($inboundData['streamSettings'] ?? '{}', true);
-                                $parsedUrl = parse_url($settings['xui_host'] ?? 'http://example.com');
-                                $serverIpOrDomain = !empty($inboundData['listen']) ? $inboundData['listen'] : ($parsedUrl['host'] ?? 'server_ip');
-                                $port = $inboundData['port'] ?? 443;
-                                $remark = $inboundData['remark'] ?? 'خدمات_وی_پی_ان';
-
-                                $paramsArray = [
-                                    'type' => $streamSettings['network'] ?? null,
-                                    'security' => $streamSettings['security'] ?? null,
-                                    'path' => $streamSettings['wsSettings']['path'] ?? ($streamSettings['grpcSettings']['serviceName'] ?? null),
-                                    'sni' => $streamSettings['tlsSettings']['serverName'] ?? null,
-                                    'host' => $streamSettings['wsSettings']['headers']['Host'] ?? null
-                                ];
-                                $params = http_build_query(array_filter($paramsArray));
-                                $fullRemark = $uniqueUsername . '|' . $remark;
-                                $configLink = "vless://{$uuid}@{$serverIpOrDomain}:{$port}?{$params}#" . urlencode($fullRemark);
-                            }
-                        }
-                    }
-
-                    if (!$configLink) {
-                        Log::error('XUI config link generation failed.', ['response' => $response, 'inbound' => $inboundId]);
-                    }
-
-                } else {
-                    Log::error('XUI user creation failed.', $response);
-                }
+        // --- بخش مدیریت دکمه‌های منو ---
+        if ($user->bot_state) {
+            if ($user->bot_state === 'awaiting_deposit_amount') {
+                $this->processDepositAmount($user, $text);
+            } elseif (Str::startsWith($user->bot_state, 'awaiting_new_ticket_') || Str::startsWith($user->bot_state, 'awaiting_ticket_reply')) {
+                $this->processTicketConversation($user, $text, $update);
             }
-        } catch (\Exception $e) {
-            Log::error("Failed to provision account for Order {$order->id}: " . $e->getMessage());
-        }
-
-        return $configLink;
-    }
-
-
-    protected function showSupportMenu($user) {
-        $user->update(['bot_state' => 'awaiting_new_ticket_subject']);
-        $cancelKeyboard = Keyboard::make()->inline()->row([
-            Keyboard::inlineButton(['text' => '❌ انصراف', 'callback_data' => '/cancel_action'])
-        ]);
-        Telegram::sendMessage([
-            'chat_id' => $user->telegram_chat_id,
-            'text' => 'لطفاً موضوع تیکت خود را ارسال کنید، یا برای انصراف روی دکمه زیر کلیک کنید:',
-            'reply_markup' => $cancelKeyboard
-        ]);
-    }
-
-    protected function sendReferralMenu($user)
-    {
-        $botUsername = Telegram::getMe()->getUsername();
-        $referralCode = $user->referral_code;
-        $referralLink = "https://t.me/{$botUsername}?start={$referralCode}";
-
-        $referrerReward = number_format((int) $this->settings->get('referral_referrer_reward', 0));
-        $referralCount = $user->referrals()->count();
-
-        $message = "🎁 *سیستم دعوت از دوستان*\n\n";
-        $message .= "دوستان خود را به ربات ما دعوت کنید و کسب درآمد کنید!\n\n";
-        $message .= "با هر خرید موفق توسط کاربری که شما دعوت کرده‌اید، مبلغ *{$referrerReward} تومان* به کیف پول شما اضافه خواهد شد.\n\n";
-        $message .= "🔗 *لینک دعوت اختصاصی شما:*\n`{$referralLink}`\n\n";
-        $message .= "👥 تعداد دعوت‌های موفق شما تا کنون: *{$referralCount} نفر*";
-
-        $keyboard = Keyboard::make()->inline()->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت به منوی اصلی', 'callback_data' => '/start'])]);
-        Telegram::sendMessage(['chat_id' => $user->telegram_chat_id, 'text' => $message, 'parse_mode' => 'Markdown', 'reply_markup' => $keyboard]);
-    }
-
-    /**
-     * پردازش پرداخت از طریق کیف پول کاربر.
-     * @param User $user
-     * @param int $planId
-     */
-    protected function processWalletPayment($user, $planId)
-    {
-        $plan = Plan::find($planId);
-        if (!$plan) {
-            Telegram::sendMessage(['chat_id' => $user->telegram_chat_id, 'text' => '❌ پلن مورد نظر یافت نشد.']);
             return;
         }
 
-        $userBalance = (float) $user->balance;
-        $planPrice = (float) $plan->price;
-
-        if ($userBalance < $planPrice) {
-            Telegram::sendMessage(['chat_id' => $user->telegram_chat_id, 'text' => '❌ موجودی کیف پول شما برای خرید این پلن کافی نیست.']);
-            return;
-        }
-
-        try {
-
-            $order = DB::transaction(function () use ($user, $plan) {
-                $user->decrement('balance', $plan->price);
-                $order = $user->orders()->create([
-                    'plan_id' => $plan->id, 'status' => 'paid', 'source' => 'telegram',
-                    'amount' => $plan->price, 'expires_at' => now()->addDays($plan->duration_days),
-                ]);
-                Transaction::create([
-                    'user_id' => $user->id, 'order_id' => $order->id, 'amount' => $plan->price,
-                    'type' => 'purchase', 'status' => 'completed',
-                    'description' => "خرید سرویس {$plan->name} (پرداخت از کیف پول)",
-                ]);
-                return $order;
-            });
-
-            // --- مرحله ۲: ساخت خودکار کانفیگ ---
-            $settings = Setting::all()->pluck('value', 'key');
-            $panelType = $settings->get('panel_type');
-            $config = null;
-            $uniqueUsername = "user-{$user->id}-order-{$order->id}";
-
-            if ($panelType === 'marzban') {
-                $trafficInBytes = $plan->volume_gb * 1073741824;
-                $marzbanService = new MarzbanService(
-                    $settings->get('marzban_host'),
-                    $settings->get('marzban_sudo_username'),
-                    $settings->get('marzban_sudo_password'),
-                    $settings->get('marzban_node_hostname')
-                );
-                $expireTimestamp = $order->expires_at->timestamp;
-                $userData = ['username' => $uniqueUsername, 'data_limit' => $trafficInBytes, 'expire' => $expireTimestamp];
-                $response = $marzbanService->createUser($userData);
-
-                if ($response && isset($response['username'])) {
-                    $config = $marzbanService->generateSubscriptionLink($response);
-                } else {
-                    Log::error('Telegram Wallet Payment - Marzban Error', ['response' => $response]);
-                }
-
-            } elseif ($panelType === 'xui') {
-                $inboundSettingId = $settings->get('xui_default_inbound_id');
-                if ($inboundSettingId) {
-                    $inbound = Inbound::find($inboundSettingId);
-                    if ($inbound && $inbound->inbound_data) {
-                        $inboundData = json_decode($inbound->inbound_data, true);
-                        $xuiService = new XUIService($settings->get('xui_host'), $settings->get('xui_user'), $settings->get('xui_pass'));
-
-                        $expireTime = $order->expires_at->timestamp * 1000;
-                        $volumeBytes = $plan->volume_gb * 1073741824;
-                        $clientData = ['email' => $uniqueUsername, 'total' => $volumeBytes, 'expiryTime' => $expireTime];
-
-                        $response = $xuiService->addClient($inboundData['id'], $clientData);
-
-                        if ($response && isset($response['success']) && $response['success']) {
-                            // منطق ساخت لینک کانفیگ (دقیقاً مشابه OrderResource)
-                            $linkType = $settings->get('xui_link_type', 'single');
-                            if ($linkType === 'subscription') {
-                                $subId = $response['generated_subId'];
-                                $subBaseUrl = rtrim($settings->get('xui_subscription_url_base'), '/');
-                                if ($subBaseUrl) {
-                                    $config = $subBaseUrl . '/json/' . $subId;
-                                }
-                            } else {
-                                $uuid = $response['generated_uuid'];
-                                $streamSettings = json_decode($inboundData['streamSettings'], true);
-                                $parsedUrl = parse_url($settings->get('xui_host'));
-                                $serverIpOrDomain = !empty($inboundData['listen']) ? $inboundData['listen'] : $parsedUrl['host'];
-                                $port = $inboundData['port'];
-                                $remark = $inboundData['remark'];
-                                $paramsArray = ['type' => $streamSettings['network'] ?? null, 'security' => $streamSettings['security'] ?? null, 'path' => $streamSettings['wsSettings']['path'] ?? ($streamSettings['grpcSettings']['serviceName'] ?? null), 'sni' => $streamSettings['tlsSettings']['serverName'] ?? null, 'host' => $streamSettings['wsSettings']['headers']['Host'] ?? null];
-                                $params = http_build_query(array_filter($paramsArray));
-                                $fullRemark = $uniqueUsername . '|' . $remark;
-                                $config = "vless://{$uuid}@{$serverIpOrDomain}:{$port}?{$params}#" . urlencode($fullRemark);
-                            }
-                        } else {
-                            Log::error('Telegram Wallet Payment - XUI Error', ['response' => $response]);
-                        }
-                    }
-                }
-            }
-
-            // --- مرحله ۳: ذخیره کانفیگ و ارسال پیام به کاربر ---
-            if ($config) {
-                $order->update(['config_details' => $config]);
+        switch ($text) {
+            case '🛒 خرید سرویس':
+                $this->sendPlans($chatId);
+                break;
+            case '🛠 سرویس‌های من':
+                $this->sendMyServices($user);
+                break;
+            case '💰 کیف پول':
+                $this->sendWalletMenu($user);
+                break;
+            case '📜 تاریخچه تراکنش‌ها':
+                $this->sendTransactions($user);
+                break;
+            case '💬 پشتیبانی':
+                $this->showSupportMenu($user);
+                break;
+            case '🎁 دعوت از دوستان':
+                $this->sendReferralMenu($user);
+                break;
+            case '📚 راهنمای اتصال':
+                $this->sendTutorialsMenu($chatId);
+                break;
+            case '/start':
                 Telegram::sendMessage([
-                    'chat_id' => $user->telegram_chat_id,
-                    'text' => "✅ خرید شما با موفقیت انجام شد و سرویس *{$plan->name}* فوراً برای شما فعال گردید. می‌توانید از بخش 'سرویس‌های من' کانفیگ خود را دریافت کنید.",
-                    'parse_mode' => 'Markdown'
+                    'chat_id' => $chatId,
+                    'text' => 'سلام مجدد! لطفاً یک گزینه را انتخاب کنید:',
+                    'reply_markup' => $this->getReplyMainMenu()
                 ]);
-            } else {
-                // اگر به هر دلیلی ساخت کانفیگ با خطا مواجه شد
+                break;
+            default:
                 Telegram::sendMessage([
-                    'chat_id' => $user->telegram_chat_id,
-                    'text' => "⚠️ پرداخت شما موفق بود اما در ساخت خودکار سرویس خطایی رخ داد. لطفاً فوراً به پشتیبانی اطلاع دهید. شماره سفارش شما: #{$order->id}"
+                    'chat_id' => $chatId,
+                    'text' => 'دستور شما نامفهوم است. لطفاً از دکمه‌های منو استفاده کنید.',
+                    'reply_markup' => $this->getReplyMainMenu()
                 ]);
-            }
-
-        } catch (\Exception $e) {
-            Log::error('Wallet Payment Failed: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
-            Telegram::sendMessage(['chat_id' => $user->telegram_chat_id, 'text' => '❌ خطایی در هنگام پردازش خرید رخ داد. لطفاً با پشتیبانی تماس بگیرید.']);
+                break;
         }
     }
 
-    protected function getReplyMainMenu(): Keyboard
-    {
-        return Keyboard::make([
-            'keyboard' => [
-                ['🛒 خرید سرویس', '🛠 سرویس‌های من'],
-                ['💰 کیف پول', '🎁 دعوت از دوستان'],
-                ['💬 پشتیبانی', '📚 راهنمای اتصال'],
-            ],
-            'resize_keyboard' => true,
-            'one_time_keyboard' => false
-        ]);
-    }
 
-    /**
-     * پردازش Callback Query ها (کلیک روی دکمه‌های Inline).
-     * @param $update
-     */
     protected function handleCallbackQuery($update)
     {
         $callbackQuery = $update->getCallbackQuery();
         $chatId = $callbackQuery->getMessage()->getChat()->getId();
+        $messageId = $callbackQuery->getMessage()->getMessageId();
         $data = $callbackQuery->getData();
         $user = User::where('telegram_chat_id', $chatId)->first();
 
         try {
             Telegram::answerCallbackQuery(['callback_query_id' => $callbackQuery->getId()]);
-        } catch (\Exception $e) {
-            Log::warning('Could not answer callback query: ' . $e->getMessage());
-        }
+        } catch (\Exception $e) { Log::warning('Could not answer callback query: ' . $e->getMessage()); }
 
-
-
-        if (!$user) return;
-        $user->update(['bot_state' => null]);
-
-
-
-        if (Str::startsWith($data, 'buy_plan_')) {
-            $planId = Str::after($data, 'buy_plan_');
-            $this->startPurchaseProcess($user, $planId);
-        }
-        elseif (Str::startsWith($data, 'pay_wallet_')) {
-            $planId = Str::after($data, 'pay_wallet_');
-            $this->processWalletPayment($user, $planId);
-        } elseif (Str::startsWith($data, 'pay_card_')) {
-            $orderId = Str::after($data, 'pay_card_');
-            $this->sendCardPaymentInfo($chatId, $orderId);
-        }
-
-        elseif (Str::startsWith($data, 'deposit_amount_')) {
-            $amount = Str::after($data, 'deposit_amount_');
-            $this->processDepositAmount($user, $amount);
-        }
-        elseif ($data === 'deposit_custom') {
-            $user->update(['bot_state' => 'awaiting_deposit_amount']);
-            Telegram::sendMessage(['chat_id' => $user->telegram_chat_id, 'text' => 'لطفاً مبلغ دلخواه خود را (به تومان) به صورت عددی وارد کنید:']);
-        }
-        elseif (Str::startsWith($data, 'close_ticket_')) {
-            $ticketId = Str::after($data, 'close_ticket_');
-            $ticket = $user->tickets()->where('id', $ticketId)->first();
-            if ($ticket && $ticket->status !== 'closed') {
-                $ticket->update(['status' => 'closed']);
-                Telegram::sendMessage(['chat_id' => $chatId, 'text' => '✅ تیکت شما بسته شد.']);
-            }
-        } elseif (Str::startsWith($data, 'reply_ticket_')) {
-            $ticketId = Str::after($data, 'reply_ticket_');
-            $user->update(['bot_state' => 'awaiting_ticket_reply|' . $ticketId]);
-            Telegram::sendMessage(['chat_id' => $chatId, 'text' => "✏️ لطفاً پاسخ خود را ارسال کنید."]);
-        } elseif ($data === '/start') {
-            Telegram::sendMessage(['chat_id' => $chatId, 'text' => "سلام مجدد *{$user->name}*! لطفاً یکی از گزینه‌ها را انتخاب کنید:", 'parse_mode' => 'Markdown', 'reply_markup' => $this->getMainMenuKeyboard()]);
-        } elseif ($data === '/plans') {
-            $this->sendPlans($chatId);
-        } elseif ($data === '/my_services') {
-            $this->sendMyServices($user);
-        }
-        elseif ($data === '/cancel_action') {
-            // وضعیت ربات را پاک کن
-            $user->update(['bot_state' => null]);
-
-            // پیامی که دکمه انصراف داشت را ویرایش کن تا دکمه حذف شود
-            Telegram::editMessageText([
-                'chat_id' => $chatId,
-                'message_id' => $callbackQuery->getMessage()->getMessageId(),
-                'text' => '✅ عملیات لغو شد.',
-                'reply_markup' => null // حذف کیبورد
-            ]);
-
-            // پیام راهنمای جدید با منوی اصلی ارسال کن
-            Telegram::sendMessage([
-                'chat_id' => $chatId,
-                'text' => 'لطفاً یکی از گزینه‌ها را انتخاب کنید:',
-                'reply_markup' => $this->getReplyMainMenu() // یا هر کیبورد اصلی دیگری که دارید
-            ]);
-        }
-
-        elseif ($data === '/wallet') {
-            $this->sendWalletMenu($user);
-
-        } elseif ($data === '/referral') {
-            $this->sendReferralMenu($user);
-        }
-
-
-
-        elseif ($data === '/deposit') {
-            $this->showDepositOptions($user);
-        }
-        elseif ($data === '/transactions') { // NEW: اضافه شده برای نمایش تاریخچه تراکنش‌ها
-            $this->sendTransactions($user);
-        }
-        elseif ($data === '/support') {
-            $user->update(['bot_state' => 'awaiting_new_ticket_subject']);
-            Telegram::sendMessage(['chat_id' => $chatId, 'text' => 'لطفاً موضوع تیکت خود را ارسال کنید:']);
-        }
-        elseif ($data === '/tutorials') {
-            $this->sendTutorialsMenu($chatId);
-        } elseif ($data === '/tutorial_android') {
-            $this->sendTutorial('android', $chatId);
-        } elseif ($data === '/tutorial_ios') {
-            $this->sendTutorial('ios', $chatId);
-        } elseif ($data === '/tutorial_windows') {
-            $this->sendTutorial('windows', $chatId);
-        }
-    }
-
-
-    /**
-     * نمایش گزینه‌های شارژ کیف پول.
-     * @param User $user
-     */
-    protected function showDepositOptions($user)
-    {
-        $message = "لطفاً یکی از مبلغ‌های زیر را برای شارژ انتخاب کنید یا مبلغ دلخواه خود را وارد نمایید:";
-        $keyboard = Keyboard::make()->inline();
-
-        $depositAmountsJson = $this->botSettings->get('deposit_amounts');
-        if ($depositAmountsJson) {
-            $amountsArray = json_decode($depositAmountsJson, true);
-
-            if (is_array($amountsArray) && !empty($amountsArray)) {
-                $amountButtons = [];
-                foreach ($amountsArray as $item) {
-                    $amount = $item['amount'] ?? null;
-                    if (is_numeric($amount)) {
-                        $amountButtons[] = Keyboard::inlineButton([
-                            'text' => number_format($amount) . ' تومان',
-                            'callback_data' => 'deposit_amount_' . $amount
-                        ]);
-                    }
-                }
-
-
-                foreach (array_chunk($amountButtons, 2) as $rowOfButtons) {
-                    $keyboard->row($rowOfButtons);
-                }
-
-            }
-        }
-
-        $keyboard->row([Keyboard::inlineButton(['text' => '✍️ ورود مبلغ دلخواه', 'callback_data' => 'deposit_custom'])]);
-        $keyboard->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت به کیف پول', 'callback_data' => '/wallet'])]);
-
-        Telegram::sendMessage([
-            'chat_id' => $user->telegram_chat_id,
-            'text' => $message,
-            'reply_markup' => $keyboard
-        ]);
-    }
-
-    /**
-     * نمایش منوی کیف پول و موجودی کاربر.
-     * @param User $user
-     */
-    protected function sendWalletMenu($user)
-    {
-        $balance = number_format($user->balance ?? 0);
-        $message = "💰 موجودی کیف پول شما: *{$balance} تومان*\n\nلطفاً یکی از گزینه‌های زیر را انتخاب کنید:";
-        $keyboard = Keyboard::make()->inline()
-            ->row([Keyboard::inlineButton(['text' => '💳 شارژ حساب (کارت به کارت)', 'callback_data' => '/deposit'])])
-            ->row([Keyboard::inlineButton(['text' => '📜 تاریخچه تراکنش‌ها', 'callback_data' => '/transactions'])])
-            ->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت به منوی اصلی', 'callback_data' => '/start'])]);
-        Telegram::sendMessage(['chat_id' => $user->telegram_chat_id, 'text' => $message, 'parse_mode' => 'Markdown', 'reply_markup' => $keyboard]);
-    }
-
-    /**
-     * ثبت سفارش شارژ حساب برای مبلغ وارد شده و هدایت به صفحه پرداخت.
-     * @param User $user
-     * @param string $amount
-     */
-    protected function processDepositAmount($user, $amount)
-    {
-        // تمیزسازی مبلغ ورودی
-        $amount = str_replace(',', '', $amount);
-        $amount = (int) $amount;
-
-        if (!is_numeric($amount) || $amount < 1000) {
-            Telegram::sendMessage(['chat_id' => $user->telegram_chat_id, 'text' => '❌ مبلغ وارد شده نامعتبر است. لطفاً یک عدد (به تومان) و بیشتر از ۱۰۰۰ وارد کنید.']);
+        if (!$user) {
+            Telegram::sendMessage(['chat_id' => $chatId, 'text' => $this->escape("❌ کاربر یافت نشد. لطفاً با دستور /start ربات را مجدداً راه‌اندازی کنید."), 'parse_mode' => 'MarkdownV2']);
             return;
         }
 
+        if (!Str::startsWith($data, ['/deposit_custom', '/support_new', 'reply_ticket_'])) {
+            $user->update(['bot_state' => null]);
+        }
 
-        $order = $user->orders()->create([
-            'plan_id' => null,
-            'status' => 'pending',
-            'source' => 'telegram',
-            'amount' => $amount
-        ]);
-
-        $user->update(['bot_state' => null]);
-
-
-        $this->sendCardPaymentInfo($user->telegram_chat_id, $order->id);
+        // --- Purchase Flow ---
+        if (Str::startsWith($data, 'buy_plan_')) {
+            $planId = Str::after($data, 'buy_plan_');
+            $this->startPurchaseProcess($user, $planId, $messageId);
+        } elseif (Str::startsWith($data, 'pay_wallet_')) {
+            $planId = Str::after($data, 'pay_wallet_');
+            $this->processWalletPayment($user, $planId, $messageId);
+        } elseif (Str::startsWith($data, 'pay_card_')) {
+            $orderId = Str::after($data, 'pay_card_');
+            $this->sendCardPaymentInfo($chatId, $orderId, $messageId);
+        }
+        // --- Renewal Flow ---
+        elseif (Str::startsWith($data, 'renew_order_')) {
+            $originalOrderId = Str::after($data, 'renew_order_');
+            $this->startRenewalPurchaseProcess($user, $originalOrderId, $messageId);
+        } elseif (Str::startsWith($data, 'renew_pay_wallet_')) {
+            $originalOrderId = Str::after($data, 'renew_pay_wallet_');
+            $this->processRenewalWalletPayment($user, $originalOrderId, $messageId);
+        } elseif (Str::startsWith($data, 'renew_pay_card_')) {
+            $originalOrderId = Str::after($data, 'renew_pay_card_');
+            $this->handleRenewCardPayment($user, $originalOrderId, $messageId);
+        }
+        // --- Deposit Flow ---
+        elseif (Str::startsWith($data, 'deposit_amount_')) {
+            $amount = Str::after($data, 'deposit_amount_');
+            $this->processDepositAmount($user, $amount, $messageId);
+        } elseif ($data === '/deposit_custom') {
+            $this->promptForCustomDeposit($user, $messageId);
+        }
+        // --- Ticket Flow ---
+        elseif (Str::startsWith($data, 'close_ticket_')) {
+            $ticketId = Str::after($data, 'close_ticket_');
+            $this->closeTicket($user, $ticketId, $messageId, $callbackQuery->getId());
+        } elseif (Str::startsWith($data, 'reply_ticket_')) {
+            $ticketId = Str::after($data, 'reply_ticket_');
+            $this->promptForTicketReply($user, $ticketId, $messageId);
+        } elseif ($data === '/support_new') {
+            $this->promptForNewTicket($user, $messageId);
+        }
+        // --- Navigation ---
+        else {
+            switch ($data) {
+                // IMPORTANT: When a user clicks an inline button, we should reply with another inline menu
+                // not the main reply menu. So we send a new message with the main reply menu.
+                case '/start':
+                    Telegram::sendMessage([
+                        'chat_id' => $chatId,
+                        'text' => '🌟 منوی اصلی',
+                        'reply_markup' => $this->getReplyMainMenu()
+                    ]);
+                    // Also delete the old inline message to avoid confusion
+                    try { Telegram::deleteMessage(['chat_id' => $chatId, 'message_id' => $messageId]); } catch (\Exception $e) {}
+                    break;
+                case '/plans': $this->sendPlans($chatId, $messageId); break;
+                case '/my_services': $this->sendMyServices($user, $messageId); break;
+                case '/wallet': $this->sendWalletMenu($user, $messageId); break;
+                case '/referral': $this->sendReferralMenu($user, $messageId); break;
+                case '/support_menu': $this->showSupportMenu($user, $messageId); break;
+                case '/deposit': $this->showDepositOptions($user, $messageId); break;
+                case '/transactions': $this->sendTransactions($user, $messageId); break;
+                case '/tutorials': $this->sendTutorialsMenu($chatId, $messageId); break;
+                case '/tutorial_android': $this->sendTutorial('android', $chatId, $messageId); break;
+                case '/tutorial_ios': $this->sendTutorial('ios', $chatId, $messageId); break;
+                case '/tutorial_windows': $this->sendTutorial('windows', $chatId, $messageId); break;
+                case '/cancel_action':
+                    $user->update(['bot_state' => null]);
+                    // Delete the message with the inline keyboard
+                    try { Telegram::deleteMessage(['chat_id' => $chatId, 'message_id' => $messageId]); } catch (\Exception $e) {}
+                    // Send a new message confirming cancellation
+                    Telegram::sendMessage([
+                        'chat_id' => $chatId,
+                        'text' => '✅ عملیات لغو شد.',
+                        'reply_markup' => $this->getReplyMainMenu(),
+                    ]);
+                    break;
+                default:
+                    Log::warning('Unknown callback data received:', ['data' => $data, 'chat_id' => $chatId]);
+                    Telegram::sendMessage([
+                        'chat_id' => $chatId,
+                        'text' => 'دستور نامعتبر.',
+                        'reply_markup' => $this->getReplyMainMenu(),
+                    ]);
+                    break;
+            }
+        }
     }
 
-    /**
-     * نمایش منوی آموزش‌ها.
-     * @param int $chatId
-     */
-    protected function sendTutorialsMenu($chatId)
-    {
-        $message = "لطفاً سیستم‌عامل خود را برای دریافت راهنمای اتصال انتخاب کنید:";
-        $keyboard = Keyboard::make()->inline()
-            ->row([Keyboard::inlineButton(['text' => '📱 اندروید (Android)', 'callback_data' => '/tutorial_android'])])
-            ->row([Keyboard::inlineButton(['text' => '🍏 آیفون (iOS)', 'callback_data' => '/tutorial_ios'])])
-            ->row([Keyboard::inlineButton(['text' => '💻 ویندوز (Windows)', 'callback_data' => '/tutorial_windows'])])
-            ->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت به منوی اصلی', 'callback_data' => '/start'])]); // بازگشت به منوی اصلی
-        // تغییر داده شده از بازگشت به آموزش به منوی اصلی چون سطح اول است.
-
-        Telegram::sendMessage(['chat_id' => $chatId, 'text' => $message, 'reply_markup' => $keyboard]);
-    }
-
-    /**
-     * پردازش پیام‌های حاوی عکس (رسید یا پیوست تیکت).
-     * @param $update
-     */
     protected function handlePhotoMessage($update)
     {
         $message = $update->getMessage();
@@ -684,390 +281,1105 @@ class WebhookController extends Controller
         $user = User::where('telegram_chat_id', $chatId)->first();
 
         if (!$user || !$user->bot_state) {
-            Telegram::sendMessage(['chat_id' => $chatId, 'text' => '❌ لطفاً ابتدا یک عملیات مانند ثبت رسید را شروع کنید، سپس عکس را ارسال نمایید.']);
+            $this->sendOrEditMainMenu($chatId, "❌ لطفاً ابتدا یک عملیات (مانند ثبت تیکت یا رسید) را شروع کنید.");
             return;
         }
 
-        // پاسخ تیکت با عکس
-        if (Str::startsWith($user->bot_state, 'awaiting_ticket_reply|')) {
-            $this->processTicketConversation($user, '📎 فایل ارسال شد', $update);
+        // Handle photo for tickets
+        if (Str::startsWith($user->bot_state, 'awaiting_ticket_reply|') || Str::startsWith($user->bot_state, 'awaiting_new_ticket_message|')) {
+            $text = $message->getCaption() ?? '[📎 فایل پیوست شد]';
+            $this->processTicketConversation($user, $text, $update);
             return;
         }
 
-        // رسید کارت به کارت
+        // Handle photo for receipts
         if (Str::startsWith($user->bot_state, 'waiting_receipt_')) {
             $orderId = Str::after($user->bot_state, 'waiting_receipt_');
             $order = Order::find($orderId);
 
             if ($order && $order->user_id === $user->id && $order->status === 'pending') {
                 try {
-                    $photo = collect($message->getPhoto())->last(); // بالاترین رزولوشن
-                    $botToken = $this->settings->get('telegram_bot_token');
-                    $file = Telegram::getFile(['file_id' => $photo->getFileId()]);
-                    $fileContents = file_get_contents("https://api.telegram.org/file/bot{$botToken}/{$file->getFilePath()}");
-
-                    if ($fileContents === false) {
-                        throw new \Exception("Failed to download file from Telegram.");
-                    }
-
-                    $fileName = 'receipts/' . Str::random(40) . '.jpg';
-                    Storage::disk('public')->put($fileName, $fileContents);
+                    $fileName = $this->savePhotoAttachment($update, 'receipts');
+                    if (!$fileName) throw new \Exception("Failed to save photo attachment.");
 
                     $order->update(['card_payment_receipt' => $fileName]);
                     $user->update(['bot_state' => null]);
 
-                    Telegram::sendMessage(['chat_id' => $chatId, 'text' => '✅ رسید با موفقیت ثبت شد. پس از بررسی توسط تیم پشتیبانی، حساب شما شارژ/سرویس شما فعال خواهد شد.']);
+                    Telegram::sendMessage([
+                        'chat_id' => $chatId,
+                        'text' => $this->escape("✅ رسید شما با موفقیت ثبت شد. پس از بررسی توسط ادمین، نتیجه به شما اطلاع داده خواهد شد."),
+                        'parse_mode' => 'MarkdownV2',
+                    ]);
+                    $this->sendOrEditMainMenu($chatId, "چه کار دیگری برایتان انجام دهم?");
 
+                    // Notify admin
                     $adminChatId = $this->settings->get('telegram_admin_chat_id');
                     if ($adminChatId) {
-                        Telegram::sendMessage([
+
+                        // --- بخش اصلاح شده ---
+                        $orderType = $order->renews_order_id ? 'تمدید سرویس' : ($order->plan_id ? 'خرید سرویس' : 'شارژ کیف پول');
+
+                        $adminMessage = "🧾 *رسید جدید برای سفارش \\#{$orderId}*\n\n";
+                        $adminMessage .= "*کاربر:* " . $this->escape($user->name) . " \\(ID: `{$user->id}`\\)\n";
+                        $adminMessage .= "*مبلغ:* " . $this->escape(number_format($order->amount) . ' تومان') . "\n";
+                        $adminMessage .= "*نوع سفارش:* " . $this->escape($orderType) . "\n\n";
+                        $adminMessage .= $this->escape("لطفا در پنل مدیریت بررسی و تایید کنید."); // <-- escape کردن جمله آخر
+
+                        Telegram::sendPhoto([
                             'chat_id' => $adminChatId,
-                            'text' => "رسید جدید برای سفارش #{$order->id} ثبت شد. مبلغ: " . number_format($order->amount) . " تومان. (کاربر: {$user->name} - #{$user->id})\nلینک رسید: " . Storage::disk('public')->url($fileName),
-                            'parse_mode' => 'Markdown'
+                            'photo' => InputFile::create(Storage::disk('public')->path($fileName)),
+                            'caption' => $adminMessage,
+                            'parse_mode' => 'MarkdownV2'
                         ]);
                     }
+
                 } catch (\Exception $e) {
-                    Log::error("Telegram receipt processing failed for order {$orderId}: " . $e->getMessage());
-                    Telegram::sendMessage(['chat_id' => $chatId, 'text' => '❌ خطا در پردازش رسید شما رخ داد. لطفاً مطمئن شوید که عکس را به درستی ارسال کرده‌اید و دوباره تلاش کنید.']);
+                    Log::error("Receipt processing failed for order {$orderId}: " . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
+                    Telegram::sendMessage(['chat_id' => $chatId, 'text' => $this->escape("❌ خطا در پردازش رسید. لطفاً دوباره تلاش کنید."), 'parse_mode' => 'MarkdownV2']);
+                    $this->sendOrEditMainMenu($chatId, "لطفا دوباره تلاش کنید.");
                 }
             } else {
-                Telegram::sendMessage(['chat_id' => $chatId, 'text' => '❌ رسید برای سفارش معتبری نیست یا وضعیت آن در انتظار پرداخت نیست.']);
+                Telegram::sendMessage(['chat_id' => $chatId, 'text' => $this->escape("❌ سفارش نامعتبر است یا در انتظار پرداخت نیست."), 'parse_mode' => 'MarkdownV2']);
+                $this->sendOrEditMainMenu($chatId, "لطفا وضعیت سفارش خود را بررسی کنید.");
             }
         }
     }
 
+    //======================================================================
+    // 2. Main Menu & Navigation Methods
+    //======================================================================
 
-    /**
-     * مدیریت مکالمات تیکت (ارسال تیکت جدید یا پاسخ به تیکت موجود).
-     * @param User $user
-     * @param string $text
-     * @param $update
-     */
-    protected function processTicketConversation($user, $text, $update = null)
+    protected function sendPlans($chatId, $messageId = null)
     {
-        $state = $user->bot_state;
-        $chatId = $user->telegram_chat_id;
+        $plans = Plan::where('is_active', true)->orderBy('price')->get();
+        if ($plans->isEmpty()) {
+            $keyboard = Keyboard::make()->inline()->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت', 'callback_data' => '/start'])]);
+            $this->sendOrEditMessage($chatId, "⚠️ هیچ پلن فعالی در دسترس نیست.", $keyboard, $messageId);
+            return;
+        }
 
-        // وضعیت پاسخ به تیکت موجود
-        if (Str::startsWith($state, 'awaiting_ticket_reply|')) {
-            $ticketId = Str::after($state, 'awaiting_ticket_reply|');
-            $ticket = Ticket::find($ticketId);
-            if ($ticket) {
-                $replyData = ['user_id' => $user->id, 'message' => $text];
+        $message = "🛒 *لیست پلن‌های موجود*\n\nلطفاً پلن مورد نظر خود را برای خرید انتخاب کنید:";
+        $keyboard = Keyboard::make()->inline();
+        foreach ($plans as $plan) {
+            $planText = $this->escape("{$plan->name} | {$plan->data_limit_gb} گیگ | " . number_format($plan->price) . " تومان");
+            $keyboard->row([
+                Keyboard::inlineButton(['text' => $planText, 'callback_data' => "buy_plan_{$plan->id}"]),
+            ]);
+        }
+        $keyboard->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت به منوی اصلی', 'callback_data' => '/start'])]);
+        $this->sendOrEditMessage($chatId, $message, $keyboard, $messageId);
+    }
 
-                // اگر عکس ارسال شده باشد
-                if ($update && $update->getMessage()->has('photo')) {
-                    try {
-                        $photo = collect($update->getMessage()->getPhoto())->last();
-                        $botToken = $this->settings->get('telegram_bot_token');
-                        $file = Telegram::getFile(['file_id' => $photo->getFileId()]);
-                        $fileContents = file_get_contents("https://api.telegram.org/file/bot{$botToken}/{$file->getFilePath()}");
-                        $fileName = 'ticket_attachments/' . Str::random(40) . '.jpg';
-                        Storage::disk('public')->put($fileName, $fileContents);
-                        $replyData['attachment_path'] = $fileName;
-                        $replyData['message'] = $replyData['message'] . "\n[📎 پیوست تصویر]";
-                    } catch (\Exception $e) {
-                        Log::error("Ticket attachment upload failed: " . $e->getMessage());
-                    }
+    protected function sendMyServices($user, $messageId = null)
+    {
+        // سرویس‌هایی که در 30 روز اخیر منقضی شده‌اند یا هنوز فعال هستند را نمایش بده
+        $orders = $user->orders()->with('plan')
+            ->where('status', 'paid')
+            ->whereNotNull('plan_id')
+            ->whereNull('renews_order_id')
+            ->where('expires_at', '>', now()->subDays(30))
+            ->orderBy('expires_at', 'desc')
+            ->get();
+
+        if ($orders->isEmpty()) {
+            $keyboard = Keyboard::make()->inline()->row([
+                Keyboard::inlineButton(['text' => '🛒 خرید سرویس جدید', 'callback_data' => '/plans']),
+                Keyboard::inlineButton(['text' => '⬅️ بازگشت به منوی اصلی', 'callback_data' => '/start']),
+            ]);
+            $this->sendOrEditMessage($user->telegram_chat_id, "⚠️ شما هیچ سرویس فعال یا اخیراً منقضی شده‌ای ندارید.", $keyboard, $messageId);
+            return;
+        }
+
+        $message = "🛠 *سرویس‌های شما*\n\n";
+        $keyboard = Keyboard::make()->inline();
+
+        foreach ($orders as $index => $order) {
+            if (!$order->plan) {
+                continue;
+            }
+
+            $expiresAt = Carbon::parse($order->expires_at);
+            $now = now();
+
+            $statusIcon = '⚫️'; // منقضی شده
+            $remainingText = "*منقضی شده*";
+            $canRenew = true;
+
+            if ($expiresAt->isFuture()) {
+
+                $daysRemaining = (int) floor($now->diffInDays($expiresAt)); // به عدد صحیح تبدیل می‌کنیم
+
+                $statusIcon = '🟢'; // فعال
+                $remainingText = "*" . $this->escape($daysRemaining . ' روز') . "* باقی‌مانده";
+
+                if ($daysRemaining <= 7) {
+                    $statusIcon = '🟡'; // در آستانه انقضا
+                    $remainingText = "*" . $this->escape($daysRemaining . ' روز') . "* باقی‌مانده \\(تمدید کنید\\)";
                 }
+            }
 
-                $ticket->replies()->create($replyData);
-                $ticket->update(['status' => 'open']);
-                $user->update(['bot_state' => null]);
+            if ($index > 0) {
+                $message .= "〰️〰️〰️〰️〰️〰️〰️〰️〰️\n\n";
+            }
 
-                Telegram::sendMessage([
-                    'chat_id' => $chatId,
-                    'text' => "✅ پاسخ شما با موفقیت ثبت شد.",
+            $message .= "{$statusIcon} *سرویس:* " . $this->escape($order->plan->name) . "\n";
+            $message .= "🗓 *انقضا:* " . $this->escape($expiresAt->format('Y/m/d')) . " \\- " . $remainingText . "\n";
+            $message .= "📦 *حجم:* " . $this->escape($order->plan->data_limit_gb . ' گیگابایت') . "\n\n";
+
+
+            if (!empty($order->config_details)) {
+
+                $message .= "🔗 *لینک اتصال:* \n`" . $order->config_details . "`\n";
+            } else {
+                $message .= "⏳ در حال آماده‌سازی کانفیگ\\.\\.\\.\n";
+            }
+
+            if ($canRenew) {
+                $keyboard->row([
+                    Keyboard::inlineButton(['text' => "🔄 تمدید سرویس #{$order->id}", 'callback_data' => "renew_order_{$order->id}"])
                 ]);
             }
         }
 
-        // وضعیت گرفتن موضوع تیکت جدید
-        elseif ($state === 'awaiting_new_ticket_subject') {
-            $user->update(['bot_state' => 'awaiting_new_ticket_message|' . $text]);
-            Telegram::sendMessage(['chat_id' => $chatId, 'text' => '✅ موضوع دریافت شد. حالا لطفاً متن کامل پیام خود را ارسال کنید:']);
-        }
-        // وضعیت گرفتن متن پیام تیکت جدید
-        elseif (Str::startsWith($state, 'awaiting_new_ticket_message|')) {
-            $subject = Str::after($state, 'awaiting_new_ticket_message|');
-            $ticket = $user->tickets()->create(['subject' => $subject, 'priority' => 'medium', 'status' => 'open', 'source' => 'telegram']);
-            $ticket->replies()->create(['user_id' => $user->id, 'message' => $text]);
+        $keyboard->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت به منوی اصلی', 'callback_data' => '/start'])]);
 
-            $user->update(['bot_state' => null]);
+        $this->sendRawMarkdownMessageWithPreview($user->telegram_chat_id, $message, $keyboard, $messageId, true);
+    }
 
-            $closeKeyboard = Keyboard::make()->inline()->row([
-                Keyboard::inlineButton(['text' => '❌ بستن تیکت', 'callback_data' => 'close_ticket_' . $ticket->id])
-            ]);
 
-            Telegram::sendMessage([
-                'chat_id' => $chatId,
-                'text' => '✅ تیکت شما با موفقیت ثبت شد و به زودی بررسی خواهد شد.',
-                'reply_markup' => $closeKeyboard
-            ]);
+    protected function sendRawMarkdownMessageWithPreview($chatId, $text, $keyboard, $messageId = null, $disablePreview = false)
+    {
+        $payload = [
+            'chat_id'      => $chatId,
+            'text'         => $text, // متن خام و فرمت‌بندی شده
+            'parse_mode'   => 'MarkdownV2',
+            'reply_markup' => $keyboard,
+            'disable_web_page_preview' => $disablePreview,
+        ];
 
-            $adminChatId = $this->settings->get('telegram_admin_chat_id');
-            if ($adminChatId) {
-                Telegram::sendMessage(['chat_id' => $adminChatId, 'text' => "تیکت جدید با موضوع '{$subject}' توسط کاربر {$user->name} از تلگرام ثبت شد."]);
+        try {
+            if ($messageId) {
+                $payload['message_id'] = $messageId;
+                Telegram::editMessageText($payload);
+            } else {
+                Telegram::sendMessage($payload);
+            }
+        } catch (\Exception $e) {
+            Log::error("Error in sendRawMarkdownMessageWithPreview: " . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
+            // Fallback logic
+            if ($messageId && \Illuminate\Support\Str::contains($e->getMessage(), 'message to edit not found')) {
+                unset($payload['message_id']);
+                try { Telegram::sendMessage($payload); } catch (\Exception $e2) { Log::error("Fallback sendRawWithPreview failed: " . $e2->getMessage()); }
             }
         }
     }
 
-    /**
-     * شروع فرآیند خرید (انتخاب روش پرداخت).
-     * @param User $user
-     * @param int $planId
-     */
-    protected function startPurchaseProcess($user, $planId)
+    protected function sendOrEditMessageWithPreviewOption($chatId, $text, $keyboard, $messageId = null, $disablePreview = false)
     {
-        $plan = Plan::find($planId);
-        if (!$user || !$plan) return;
+        // First, escape the text for MarkdownV2 as usual.
+        // The main sendOrEditMessage expects escaped text.
+        $escapedText = $this->escape($text);
 
-        $balance = $user->balance ?? 0;
+        // Let's create a new payload here to add the 'disable_web_page_preview' option
+        $payload = [
+            'chat_id'      => $chatId,
+            'text'         => $escapedText,
+            'parse_mode'   => 'MarkdownV2',
+            'reply_markup' => $keyboard,
+            'disable_web_page_preview' => $disablePreview
+        ];
 
-        $message = "شما در حال خرید پلن *{$plan->name}* به قیمت *" . number_format($plan->price) . " تومان* هستید.\n";
-        $message .= "موجودی کیف پول شما: *" . number_format($balance) . " تومان*\n\n";
-        $message .= "لطفاً روش پرداخت خود را انتخاب کنید:";
-
-        $keyboard = Keyboard::make()->inline();
-
-
-        if ($balance >= $plan->price) {
-            $keyboard->row([Keyboard::inlineButton(['text' => '✅ پرداخت با کیف پول (فعالسازی آنی)', 'callback_data' => "pay_wallet_{$plan->id}"])]);
+        try {
+            if ($messageId) {
+                $payload['message_id'] = $messageId;
+                // The logic from sendOrEditMessage can be simplified and put here directly for this specific case
+                Telegram::editMessageText($payload);
+            } else {
+                Telegram::sendMessage($payload);
+            }
+        } catch (\Exception $e) {
+            Log::error("Error in sendOrEditMessageWithPreviewOption: " . $e->getMessage());
+            // Fallback logic from the original sendOrEditMessage
+            if ($messageId && Str::contains($e->getMessage(), ['message to edit not found'])) {
+                unset($payload['message_id']);
+                try { Telegram::sendMessage($payload); } catch (\Exception $e2) {}
+            }
         }
-
-
-        $order = $user->orders()->create([
-            'plan_id' => $plan->id,
-            'status' => 'pending',
-            'source' => 'telegram',
-            'amount' => $plan->price
-        ]);
-
-        $keyboard->row([Keyboard::inlineButton(['text' => '💳 کارت به کارت (نیاز به تایید)', 'callback_data' => "pay_card_{$order->id}"])]);
-        $keyboard->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت به پلن‌ها', 'callback_data' => '/plans'])]);
-
-        Telegram::sendMessage(['chat_id' => $user->telegram_chat_id, 'text' => $message, 'parse_mode' => 'Markdown', 'reply_markup' => $keyboard]);
     }
-
-    /**
-     * ارسال اطلاعات کارت به کارت و درخواست رسید.
-     * @param int $chatId
-     * @param int $orderId
-     */
-    protected function sendCardPaymentInfo($chatId, $orderId)
+    protected function sendWalletMenu($user, $messageId = null)
     {
-        $user = User::where('telegram_chat_id', $chatId)->first();
-        $order = Order::find($orderId);
+        $balance = number_format($user->balance ?? 0);
+        $message = "💰 *کیف پول شما*\n\n";
+        $message .= "موجودی فعلی: *{$balance} تومان*\n\n";
+        $message .= "می‌توانید حساب خود را شارژ کنید یا تاریخچه تراکنش‌ها را مشاهده نمایید:";
 
-        if(!$user || !$order || $order->user_id !== $user->id) {
-            Telegram::sendMessage(['chat_id' => $chatId, 'text' => '❌ خطای سیستم: سفارش یافت نشد.']);
-            return;
-        }
-
-        // تنظیم وضعیت کاربر برای انتظار دریافت عکس رسید
-        $user->update(['bot_state' => 'waiting_receipt_' . $orderId]);
-
-
-        $cardNumber = $this->settings->get('payment_card_number', 'شماره کارتی یافت نشد');
-        $cardHolder = $this->settings->get('payment_card_holder_name', 'صاحب حسابی یافت نشد');
-        $amountToPay = number_format($order->amount);
-
-        $message = "لطفاً مبلغ *" . $amountToPay . " تومان* را به کارت زیر واریز نمایید:\n\n";
-        $message .= "💳 شماره کارت: `" . $cardNumber . "`\n";
-        $message .= "👤 نام صاحب حساب: *" . $cardHolder . "*\n";
-        $message .= "🔔 توجه: فقط مبلغ *" . $amountToPay . " تومان* را واریز کنید.\n\n";
-        $message .= "🔴 **سپس فقط عکس رسید واریزی (عکس از صفحه اپلیکیشن بانکی یا عابربانک) را در همین چت ارسال کنید.**";
-        Telegram::sendMessage(['chat_id' => $chatId, 'text' => $message, 'parse_mode' => 'Markdown']);
-    }
-
-    /**
-     * ارسال لیست پلن‌های فعال.
-     * @param int $chatId
-     */
-    protected function sendPlans($chatId)
-    {
-        $plans = Plan::where('is_active', true)->orderBy('price')->get();
-        if ($plans->isEmpty()) {
-            Telegram::sendMessage(['chat_id' => $chatId, 'text' => 'متاسفانه در حال حاضر هیچ پلن فعالی وجود ندارد.']);
-            return;
-        }
-
-        $message = "لیست پلن‌های موجود:\n\n";
-        $keyboard = Keyboard::make()->inline();
-        foreach ($plans as $plan) {
-            $message .= "--------------------------------------\n";
-            $message .= "💎 *{$plan->name}*\n";
-            $message .= "📊 حجم: *{$plan->data_limit_gb} گیگ*\n";
-            $message .= "🗓️ مدت: *{$plan->duration_days} روز*\n";
-            $message .= "💰 قیمت: *" . number_format($plan->price) . " تومان*\n";
-            $message .= "--------------------------------------\n";
-
-            $keyboard->row([Keyboard::inlineButton(['text' => "🛒 خرید پلن {$plan->name}", 'callback_data' => "buy_plan_{$plan->id}"])]);
-        }
-
-        $keyboard->row([
-            \Telegram\Bot\Keyboard\Keyboard::inlineButton([
-                'text' => '⬅️ بازگشت به منوی اصلی',
-                'callback_data' => '/start'
+        $keyboard = Keyboard::make()->inline()
+            ->row([
+                Keyboard::inlineButton(['text' => '💳 شارژ حساب', 'callback_data' => '/deposit']),
+                Keyboard::inlineButton(['text' => '📜 تاریخچه تراکنش‌ها', 'callback_data' => '/transactions']),
             ])
-        ]);
+            ->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت به منوی اصلی', 'callback_data' => '/start'])]);
 
-        Telegram::sendMessage(['chat_id' => $chatId, 'text' => $message, 'parse_mode' => 'Markdown', 'reply_markup' => $keyboard]);
+        $this->sendOrEditMessage($user->telegram_chat_id, $message, $keyboard, $messageId);
     }
 
-    /**
-     * نمایش سرویس‌های فعال کاربر.
-     * @param User $user
-     */
-    protected function sendMyServices($user)
+    protected function sendReferralMenu($user, $messageId = null)
     {
-        $activeOrders = $user->orders()
-            ->with('plan')
-            ->where('status', 'paid')
-            ->whereNotNull('plan_id')
-            ->where('expires_at', '>', now())
-            ->latest()
-            ->get();
-
-        if ($activeOrders->isEmpty()) {
-            Telegram::sendMessage(['chat_id' => $user->telegram_chat_id, 'text' => 'شما در حال حاضر هیچ سرویس فعالی ندارید.']);
+        try {
+            $botInfo = Telegram::getMe();
+            $botUsername = $botInfo->getUsername();
+        } catch (\Exception $e) {
+            Log::error("Could not get bot username: " . $e->getMessage());
+            $this->sendOrEditMainMenu($user->telegram_chat_id, "❌ خطایی در دریافت اطلاعات ربات رخ داد.", $messageId);
             return;
         }
 
-        $message = "لیست سرویس‌های فعال شما:\n\n";
+        $referralCode = $user->referral_code ?? Str::random(8);
+        if (!$user->referral_code) {
+            $user->update(['referral_code' => $referralCode]);
+        }
+        $referralLink = "https://t.me/{$botUsername}?start={$referralCode}";
+        $referrerReward = number_format((int) $this->settings->get('referral_referrer_reward', 0));
+        $referralCount = $user->referrals()->count();
 
-        foreach ($activeOrders as $order) {
-            if (!$order->plan) continue;
+        $message = "🎁 *دعوت از دوستان*\n\n";
+        $message .= "با اشتراک‌گذاری لینک زیر، دوستان خود را به ربات دعوت کنید.\n\n";
+        $message .= "💸 با هر خرید موفق دوستانتان، *{$referrerReward} تومان* به کیف پول شما اضافه می‌شود.\n\n";
+        $message .= "🔗 *لینک دعوت شما:*\n`{$referralLink}`\n\n";
+        $message .= "👥 تعداد دعوت‌های موفق شما: *{$referralCount} نفر*";
 
-            $expiresAt = Carbon::parse($order->expires_at);
+        $keyboard = Keyboard::make()->inline()->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت به منوی اصلی', 'callback_data' => '/start'])]);
+        $this->sendOrEditMessage($user->telegram_chat_id, $message, $keyboard, $messageId);
+    }
 
-            // --- شروع تغییر کلیدی ---
-            // محاسبه روزهای باقی‌مانده و گرد کردن آن به پایین
-            $daysRemaining = floor(now()->diffInDays($expiresAt, false));
-            // --- پایان تغییر کلیدی ---
+    protected function sendTransactions($user, $messageId = null)
+    {
 
-            $remainingText = "";
-            if ($daysRemaining > 0) {
-                $remainingText = "(*{$daysRemaining} روز باقی‌مانده*)";
-            } elseif ($daysRemaining == 0) {
-                $remainingText = "(*کمتر از یک روز باقی‌مانده*)"; // متن را برای حالت صفر بهبود می‌دهیم
-            } else {
-                // این حالت با کوئری where('expires_at', '>', now()) رخ نمی‌دهد، اما برای اطمینان باقی می‌ماند
-                $remainingText = "(*منقضی شده*)";
-            }
+        $transactions = $user->transactions()->with('order.plan')->latest()->take(10)->get();
 
-            $message .= "--------------------------------------\n";
-            $message .= "💎 *{$order->plan->name}*\n";
-            $message .= "🗓️ تاریخ انقضا: *" . $expiresAt->format('Y/m/d') . "* " . $remainingText . "\n";
-            $message .= "📦 حجم کل: *{$order->plan->volume_gb} گیگابایت*\n";
+        $message = "📜 *۱۰ تراکنش اخیر شما*\n\n";
 
-            if (!empty($order->config_details)) {
-                $message .= "🔗 *لینک اتصال:*\n`{$order->config_details}`\n";
-            } else {
-                $message .= "⚠️ کانفیگ در حال آماده‌سازی است. لطفاً کمی صبر کنید یا با پشتیبانی تماس بگیرید.\n";
+        if ($transactions->isEmpty()) {
+            $message .= $this->escape("شما تاکنون هیچ تراکنشی ثبت نکرده‌اید.");
+        } else {
+            foreach ($transactions as $transaction) {
+
+                // --- بخش تعیین نوع تراکنش ---
+                $type = 'نامشخص';
+                switch ($transaction->type) {
+                    case 'deposit':
+                        $type = '💰 شارژ کیف پول';
+                        break;
+                    case 'purchase':
+                        if ($transaction->order?->renews_order_id) {
+                            $type = '🔄 تمدید سرویس';
+                        } else {
+                            $type = '🛒 خرید سرویس';
+                        }
+                        break;
+                    case 'referral_reward':
+                        $type = '🎁 پاداش دعوت';
+                        break;
+                }
+
+                // --- بخش تعیین وضعیت ---
+                $status = '⚪️'; // پیش‌فرض
+                switch ($transaction->status) {
+                    case 'completed':
+                        $status = '✅'; // موفق
+                        break;
+                    case 'pending':
+                        $status = '⏳'; // در انتظار
+                        break;
+                    case 'failed':
+                        $status = '❌'; // ناموفق
+                        break;
+                }
+
+                $amount = number_format(abs($transaction->amount));
+                $date = Carbon::parse($transaction->created_at)->format('Y/m/d');
+
+                // --- ساخت پیام برای هر تراکنش ---
+                $message .= "{$status} *" . $this->escape($type) . "*\n";
+                $message .= "   💸 *مبلغ:* " . $this->escape($amount . " تومان") . "\n";
+                $message .= "   📅 *تاریخ:* " . $this->escape($date) . "\n";
+                if ($transaction->order?->plan) {
+                    $message .= "   🏷 *پلن:* " . $this->escape($transaction->order->plan->name) . "\n";
+                }
+                $message .= "〰️〰️〰️〰️〰️〰️\n";
             }
         }
-
-        $message .= "\nبرای مدیریت سرویس‌ها و مشاهده میزان مصرف، از پنل کاربری خود نیز می‌توانید استفاده کنید.";
 
         $keyboard = Keyboard::make()->inline()->row([
-            Keyboard::inlineButton(['text' => '⬅️ بازگشت به منوی اصلی', 'callback_data' => '/start'])
+            Keyboard::inlineButton(['text' => '⬅️ بازگشت به کیف پول', 'callback_data' => '/wallet'])
         ]);
 
-        Telegram::sendMessage([
-            'chat_id' => $user->telegram_chat_id,
-            'text' => $message,
-            'parse_mode' => 'Markdown',
-            'reply_markup' => $keyboard
-        ]);
+
+        $this->sendRawMarkdownMessage($user->telegram_chat_id, $message, $keyboard, $messageId);
     }
+    protected function sendTutorialsMenu($chatId, $messageId = null)
+    {
+        $message = "📚 *راهنمای اتصال*\n\nلطفاً سیستم‌عامل خود را برای دریافت راهنما و لینک دانلود انتخاب کنید:";
+        $keyboard = Keyboard::make()->inline()
+            ->row([
+                Keyboard::inlineButton(['text' => '📱 اندروید (V2rayNG)', 'callback_data' => '/tutorial_android']),
+                Keyboard::inlineButton(['text' => '🍏 آیفون (V2Box)', 'callback_data' => '/tutorial_ios']),
+            ])
+            ->row([
+                Keyboard::inlineButton(['text' => '💻 ویندوز (V2rayN)', 'callback_data' => '/tutorial_windows']),
+                Keyboard::inlineButton(['text' => '⬅️ بازگشت به منوی اصلی', 'callback_data' => '/start']),
+            ]);
+        $this->sendOrEditMessage($chatId, $message, $keyboard, $messageId);
+    }
+
+    protected function sendTutorial($platform, $chatId, $messageId = null)
+    {
+        $tutorials = [
+            'android' => "*راهنمای اندروید \\(V2rayNG\\)*\n\n1\\. برنامه V2rayNG را از [این لینک](https://github.com/2dust/v2rayNG/releases) دانلود و نصب کنید\\.\n2\\. لینک کانفیگ را از بخش *سرویس‌های من* کپی کنید\\.\n3\\. در برنامه، روی علامت `+` بزنید و `Import config from Clipboard` را انتخاب کنید\\.\n4\\. کانفیگ اضافه شده را انتخاب و دکمه اتصال \\(V شکل\\) پایین صفحه را بزنید\\.",
+            'ios' => "*راهنمای آیفون \\(V2Box\\)*\n\n1\\. برنامه V2Box را از [اپ استور](https://apps.apple.com/us/app/v2box-v2ray-client/id6446814690) نصب کنید\\.\n2\\. لینک کانفیگ را از بخش *سرویس‌های من* کپی کنید\\.\n3\\. در برنامه، وارد بخش `Configs` شوید، روی `+` بزنید و `Import from clipboard` را انتخاب کنید\\.\n4\\. برای اتصال، به بخش `Home` بروید و دکمه اتصال را بزنید \\(ممکن است نیاز به تایید VPN در تنظیمات گوشی باشد\\)\\.",
+            'windows' => "*راهنمای ویندوز \\(V2rayN\\)*\n\n1\\. برنامه v2rayN را از [این لینک](https://github.com/2dust/v2rayN/releases) دانلود \\(فایل `v2rayN-With-Core.zip`\\) و از حالت فشرده خارج کنید\\.\n2\\. فایل `v2rayN.exe` را اجرا کنید\\.\n3\\. لینک کانفیگ را از بخش *سرویس‌های من* کپی کنید\\.\n4\\. در برنامه V2RayN، کلیدهای `Ctrl+V` را فشار دهید تا سرور اضافه شود\\.\n5\\. روی آیکون برنامه در تسک‌بار \\(کنار ساعت\\) راست کلیک کرده، از منوی `System Proxy` گزینه `Set system proxy` را انتخاب کنید تا تیک بخورد\\.\n6\\. برای اتصال، دوباره روی آیکون راست کلیک کرده و از منوی `Servers` کانفیگ اضافه شده را انتخاب کنید\\.",
+        ];
+
+        $message = $tutorials[$platform] ?? "آموزش یافت نشد.";
+        $keyboard = Keyboard::make()->inline()->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت به آموزش‌ها', 'callback_data' => '/tutorials'])]);
+
+        $payload = [
+            'chat_id'      => $chatId,
+            'text'         => $message, // Already formatted
+            'parse_mode'   => 'MarkdownV2',
+            'reply_markup' => $keyboard,
+            'disable_web_page_preview' => true
+        ];
+        try {
+            if ($messageId) {
+                $payload['message_id'] = $messageId;
+                Telegram::editMessageText($payload);
+            } else {
+                Telegram::sendMessage($payload);
+            }
+        } catch (\Exception $e) {
+            Log::warning("Could not edit/send tutorial message: " . $e->getMessage());
+            if($messageId) {
+                unset($payload['message_id']);
+                try { Telegram::sendMessage($payload); } catch (\Exception $e2) {Log::error("Failed fallback send tutorial: " . $e2->getMessage());}
+            }
+        }
+    }
+
+
+    //======================================================================
+    // 3. Purchase & Payment Methods
+    //======================================================================
+
+    protected function startPurchaseProcess($user, $planId, $messageId)
+    {
+        $plan = Plan::find($planId);
+        if (!$plan) {
+            $this->sendOrEditMainMenu($user->telegram_chat_id, "❌ پلن مورد نظر یافت نشد.", $messageId);
+            return;
+        }
+
+        $balance = $user->balance ?? 0;
+        $message = "🛒 *تایید خرید*\n\n";
+        $message .= "▫️ پلن: *{$this->escape($plan->name)}*\n";
+        $message .= "▫️ قیمت: *" . number_format($plan->price) . " تومان*\n";
+        $message .= "▫️ موجودی کیف پول: *" . number_format($balance) . " تومان*\n\n";
+        $message .= "لطفاً روش پرداخت را انتخاب کنید:";
+
+        $keyboard = Keyboard::make()->inline();
+        if ($balance >= $plan->price) {
+            $keyboard->row([Keyboard::inlineButton(['text' => '✅ پرداخت با کیف پول', 'callback_data' => "pay_wallet_{$plan->id}"])]);
+        }
+        $order = $user->orders()->create(['plan_id' => $plan->id, 'status' => 'pending', 'source' => 'telegram', 'amount' => $plan->price]);
+        $keyboard->row([Keyboard::inlineButton(['text' => '💳 کارت به کارت', 'callback_data' => "pay_card_{$order->id}"])])
+            ->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت به پلن‌ها', 'callback_data' => '/plans'])]);
+
+        $this->sendOrEditMessage($user->telegram_chat_id, $message, $keyboard, $messageId);
+    }
+
+    protected function processWalletPayment($user, $planId, $messageId)
+    {
+        $plan = Plan::find($planId);
+        if (!$plan) {
+            $this->sendOrEditMessage($user->telegram_chat_id, "❌ پلن یافت نشد.", Keyboard::make()->inline()->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت', 'callback_data' => '/plans'])]), $messageId);
+            return;
+        }
+        if ($user->balance < $plan->price) {
+            $this->sendOrEditMessage($user->telegram_chat_id, "❌ موجودی کیف پول شما کافی نیست.", Keyboard::make()->inline()->row([Keyboard::inlineButton(['text' => '💳 شارژ کیف پول', 'callback_data' => '/deposit']), Keyboard::inlineButton(['text' => '⬅️ بازگشت', 'callback_data' => '/plans'])]), $messageId);
+            return;
+        }
+
+        $order = null;
+        try {
+            DB::transaction(function () use ($user, $plan, &$order) {
+                $user->decrement('balance', $plan->price);
+
+                $order = $user->orders()->create([
+                    'plan_id' => $plan->id, 'status' => 'paid', 'source' => 'telegram',
+                    'amount' => $plan->price, 'expires_at' => now()->addDays($plan->duration_days),
+                    'payment_method' => 'wallet'
+                ]);
+
+                Transaction::create([
+                    'user_id' => $user->id, 'order_id' => $order->id, 'amount' => -$plan->price,
+                    'type' => 'purchase', 'status' => 'completed',
+                    'description' => "خرید سرویس {$plan->name} از کیف پول"
+                ]);
+
+                $config = $this->provisionUserAccount($order, $plan);
+                if ($config) {
+                    $order->update(['config_details' => $config]);
+                } else {
+                    throw new \Exception('Provisioning failed, config is null.');
+                }
+            });
+
+            $successMessage = "✅ خرید شما با موفقیت انجام شد.\n\n";
+            $successMessage .= "لینک کانفیگ:\n`{$this->escape($order->config_details)}`";
+            $this->sendOrEditMessage($user->telegram_chat_id, $successMessage, Keyboard::make()->inline()->row([Keyboard::inlineButton(['text' => '🛠 سرویس‌های من', 'callback_data' => '/my_services']), Keyboard::inlineButton(['text' => '🏠 منوی اصلی', 'callback_data' => '/start'])]), $messageId);
+
+        } catch (\Exception $e) {
+            Log::error('Wallet Payment Failed: ' . $e->getMessage(), ['trace' => $e->getTraceAsString(), 'plan_id' => $planId, 'user_id' => $user->id]);
+            if ($order && $order->exists) {
+                $order->update(['status' => 'failed']);
+                try {
+                    $user->increment('balance', $plan->price); // Refund
+                    Log::info("User balance refunded after failed provisioning.", ['user_id' => $user->id, 'amount' => $plan->price]);
+                } catch (\Exception $refundEx) {
+                    Log::critical("CRITICAL: Failed to refund user balance!", ['user_id' => $user->id, 'amount' => $plan->price, 'error' => $refundEx->getMessage()]);
+                }
+            }
+            $orderIdText = $order ? "\\#{$order->id}" : '';
+            $this->sendOrEditMessage($user->telegram_chat_id, "⚠️ پرداخت موفق بود اما در ایجاد سرویس خطایی رخ داد. مبلغ به کیف پول شما بازگردانده شد. لطفاً با پشتیبانی تماس بگیرید. سفارش: {$orderIdText}", Keyboard::make()->inline()->row([Keyboard::inlineButton(['text' => '💬 پشتیبانی', 'callback_data' => '/support_menu'])]), $messageId);
+        }
+    }
+
+    protected function provisionUserAccount(Order $order, Plan $plan)
+    {
+        $settings = $this->settings;
+        $configLink = null;
+        $uniqueUsername = "user-{$order->user_id}-order-{$order->id}";
+
+        try {
+            if (($settings->get('panel_type') ?? 'marzban') === 'marzban') {
+                $marzban = new MarzbanService($settings->get('marzban_host'), $settings->get('marzban_sudo_username'), $settings->get('marzban_sudo_password'), $settings->get('marzban_node_hostname'));
+                $response = $marzban->createUser([
+                    'username' => $uniqueUsername,
+                    'proxies' => (object) [],
+                    'expire' => $order->expires_at->timestamp,
+                    'data_limit' => $plan->data_limit_gb * 1024 * 1024 * 1024,
+                ]);
+                if (!empty($response['subscription_url'])) {
+                    $configLink = $response['subscription_url'];
+                } else {
+                    Log::error('Marzban user creation failed or subscription URL missing.', ['response' => $response]);
+                    return null;
+                }
+            } elseif ($settings->get('panel_type') === 'xui') {
+                $inboundId = $settings->get('xui_default_inbound_id');
+                if (!$inboundId) { Log::error("XUI Inbound ID is not set in settings."); return null; }
+
+                $xui = new XUIService($settings->get('xui_host'), $settings->get('xui_user'), $settings->get('xui_pass'));
+                $clientData = [
+                    'email' => $uniqueUsername,
+                    'total' => $plan->data_limit_gb * 1024 * 1024 * 1024,
+                    'expiryTime' => $order->expires_at->timestamp * 1000,
+                ];
+                $response = $xui->addClient($inboundId, $clientData);
+
+                if ($response && isset($response['success']) && $response['success']) {
+                    $inbound = Inbound::find($inboundId);
+                    if ($inbound && $inbound->inbound_data) {
+                        $inboundData = json_decode($inbound->inbound_data, true);
+                        $linkType = $settings->get('xui_link_type', 'single');
+
+                        if ($linkType === 'subscription') {
+                            $subId = $response['obj']['id'] ?? $uniqueUsername;
+                            $subBaseUrl = rtrim($settings->get('xui_subscription_url_base'), '/');
+                            if($subBaseUrl){
+                                $configLink = $subBaseUrl . '/sub/' . $subId;
+                            } else { Log::error("XUI Subscription base URL is not set."); }
+                        } else {
+                            $clientSettings = json_decode($response['obj']['settings'] ?? '{}', true);
+                            $uuid = $clientSettings['clients'][0]['id'] ?? $response['obj']['id'] ?? null;
+
+                            if ($uuid){
+                                $streamSettings = json_decode($inboundData['streamSettings'] ?? '{}', true);
+                                $serverAddress = $settings->get('server_address_for_link', parse_url($settings->get('xui_host'), PHP_URL_HOST));
+                                $port = $inboundData['port'] ?? 443;
+                                $remark = $plan->name;
+                                $params = [];
+                                $params['type'] = $streamSettings['network'] ?? 'ws';
+                                $params['security'] = $streamSettings['security'] ?? 'none';
+                                if($params['type'] === 'ws' && isset($streamSettings['wsSettings'])){
+                                    $params['path'] = $streamSettings['wsSettings']['path'] ?? '/';
+                                    $params['host'] = $streamSettings['wsSettings']['headers']['Host'] ?? $serverAddress;
+                                }
+                                if($params['security'] === 'tls' && isset($streamSettings['tlsSettings'])){
+                                    $params['sni'] = $streamSettings['tlsSettings']['serverName'] ?? $serverAddress;
+                                }
+                                $queryString = http_build_query(array_filter($params));
+                                $configLink = "vless://{$uuid}@{$serverAddress}:{$port}?{$queryString}#" . urlencode($remark . " - " . $uniqueUsername);
+                            } else { Log::error('Could not extract UUID from XUI response.', ['response' => $response]); }
+                        }
+                    } else { Log::error('Inbound data not found for ID: ' . $inboundId); }
+                } else {
+                    Log::error('XUI user creation failed.', ['response' => $response]);
+                    return null;
+                }
+            }
+        } catch (\Exception $e) {
+            Log::error("Failed to provision account for Order {$order->id}: " . $e->getMessage());
+            return null;
+        }
+        return $configLink;
+    }
+
+    protected function showDepositOptions($user, $messageId)
+    {
+        $message = "💳 *شارژ کیف پول*\n\nلطفاً مبلغ مورد نظر برای شارژ را انتخاب کنید یا مبلغ دلخواه خود را وارد نمایید:";
+        $keyboard = Keyboard::make()->inline();
+        $depositAmounts = [50000, 100000, 200000, 500000];
+        foreach (array_chunk($depositAmounts, 2) as $row) {
+            $rowButtons = [];
+            foreach ($row as $amount) {
+                $rowButtons[] = Keyboard::inlineButton(['text' => number_format($amount) . ' تومان', 'callback_data' => 'deposit_amount_' . $amount]);
+            }
+            $keyboard->row($rowButtons);
+        }
+        $keyboard->row([Keyboard::inlineButton(['text' => '✍️ ورود مبلغ دلخواه', 'callback_data' => '/deposit_custom'])])
+            ->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت به کیف پول', 'callback_data' => '/wallet'])]);
+
+        $this->sendOrEditMessage($user->telegram_chat_id, $message, $keyboard, $messageId);
+    }
+
+    protected function promptForCustomDeposit($user, $messageId)
+    {
+        $user->update(['bot_state' => 'awaiting_deposit_amount']);
+        $keyboard = Keyboard::make()->inline()->row([Keyboard::inlineButton(['text' => '❌ انصراف', 'callback_data' => '/cancel_action'])]);
+        $this->sendOrEditMessage($user->telegram_chat_id, "💳 لطفاً مبلغ دلخواه خود را (به تومان، حداقل ۱۰,۰۰۰) در یک پیام ارسال کنید:", $keyboard, $messageId);
+    }
+
+    protected function processDepositAmount($user, $amount, $messageId = null)
+    {
+        $amount = (int) preg_replace('/[^\d]/', '', $amount);
+        $minDeposit = (int) $this->settings->get('min_deposit_amount', 10000);
+
+        if ($amount < $minDeposit) {
+            Telegram::sendMessage([
+                'chat_id' => $user->telegram_chat_id,
+                'text' => $this->escape("❌ مبلغ نامعتبر است. لطفاً مبلغی حداقل " . number_format($minDeposit) . " تومان وارد کنید."),
+                'parse_mode' => 'MarkdownV2'
+            ]);
+            $this->promptForCustomDeposit($user, null);
+            return;
+        }
+
+        $order = $user->orders()->create([
+            'plan_id' => null, 'status' => 'pending', 'source' => 'telegram_deposit', 'amount' => $amount
+        ]);
+        $user->update(['bot_state' => null]);
+        $this->sendCardPaymentInfo($user->telegram_chat_id, $order->id, $messageId);
+    }
+
+    protected function sendCardPaymentInfo($chatId, $orderId, $messageId)
+    {
+        $order = Order::find($orderId);
+        if (!$order) {
+            $this->sendOrEditMainMenu($chatId, "❌ سفارش یافت نشد.", $messageId);
+            return;
+        }
+        $user = $order->user;
+        $user->update(['bot_state' => 'waiting_receipt_' . $orderId]);
+
+        $cardNumber = $this->settings->get('payment_card_number', 'شماره کارتی تنظیم نشده');
+        $cardHolder = $this->settings->get('payment_card_holder_name', 'صاحب حسابی تنظیم نشده');
+        $amountToPay = number_format($order->amount);
+
+        // --- ساخت پیام جدید و زیبا ---
+        // متغیرها را جداگانه escape می‌کنیم و در متن فرمت‌بندی شده قرار می‌دهیم
+        $message = "💳 *پرداخت کارت به کارت*\n\n";
+        $message .= "لطفاً مبلغ *" . $this->escape($amountToPay) . " تومان* را به حساب زیر واریز نمایید:\n\n";
+        $message .= "👤 *به نام:* " . $this->escape($cardHolder) . "\n";
+        $message .= "💳 *شماره کارت:*\n`" . $this->escape($cardNumber) . "`\n\n";
+        $message .= "🔔 *مهم:* پس از واریز، *فقط عکس رسید* را در همین چت ارسال کنید\\.";
+
+        $keyboard = Keyboard::make()->inline()->row([Keyboard::inlineButton(['text' => '❌ انصراف از پرداخت', 'callback_data' => '/cancel_action'])]);
+
+        // از متد جدید برای ارسال پیام فرمت‌شده استفاده می‌کنیم
+        $this->sendRawMarkdownMessage($chatId, $message, $keyboard, $messageId);
+    }
+
+    protected function sendRawMarkdownMessage($chatId, $text, $keyboard, $messageId = null)
+    {
+        $payload = [
+            'chat_id'      => $chatId,
+            'text'         => $text,
+            'parse_mode'   => 'MarkdownV2',
+            'reply_markup' => $keyboard
+        ];
+        try {
+            if ($messageId) {
+                $payload['message_id'] = $messageId;
+                Telegram::editMessageText($payload);
+            } else {
+                Telegram::sendMessage($payload);
+            }
+        } catch (\Exception $e) {
+            Log::error("Error in sendRawMarkdownMessage: " . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
+
+            if ($messageId && \Illuminate\Support\Str::contains($e->getMessage(), 'message to edit not found')) {
+                unset($payload['message_id']);
+                try { Telegram::sendMessage($payload); } catch (\Exception $e2) { Log::error("Fallback sendRaw failed: " . $e2->getMessage()); }
+            }
+        }
+    }
+
+    //======================================================================
+    // 4. Renewal Methods
+    //======================================================================
+
+    protected function startRenewalPurchaseProcess($user, $originalOrderId, $messageId)
+    {
+        $originalOrder = $user->orders()->with('plan')->find($originalOrderId);
+
+        if (!$originalOrder || !$originalOrder->plan || $originalOrder->status !== 'paid') {
+            $this->sendOrEditMainMenu($user->telegram_chat_id, "❌ سرویس مورد نظر برای تمدید یافت نشد یا معتبر نیست.", $messageId);
+            return;
+        }
+
+        $plan = $originalOrder->plan;
+        $balance = $user->balance ?? 0;
+        $expiresAt = Carbon::parse($originalOrder->expires_at);
+
+        $message = "🔄 *تایید تمدید سرویس*\n\n";
+        $message .= "▫️ سرویس: *{$this->escape($plan->name)}*\n";
+        $message .= "▫️ تاریخ انقضای فعلی: *" . $this->escape($expiresAt->format('Y/m/d')) . "*\n";
+        $message .= "▫️ هزینه تمدید ({$plan->duration_days} روز): *" . number_format($plan->price) . " تومان*\n";
+        $message .= "▫️ موجودی کیف پول: *" . number_format($balance) . " تومان*\n\n";
+        $message .= "لطفاً روش پرداخت برای تمدید را انتخاب کنید:";
+
+        $keyboard = Keyboard::make()->inline();
+        if ($balance >= $plan->price) {
+            $keyboard->row([Keyboard::inlineButton(['text' => '✅ تمدید با کیف پول (آنی)', 'callback_data' => "renew_pay_wallet_{$originalOrderId}"])]);
+        }
+        $keyboard->row([Keyboard::inlineButton(['text' => '💳 تمدید با کارت به کارت', 'callback_data' => "renew_pay_card_{$originalOrderId}"])])
+            ->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت به سرویس‌ها', 'callback_data' => '/my_services'])]);
+
+        $this->sendOrEditMessage($user->telegram_chat_id, $message, $keyboard, $messageId);
+    }
+
+    protected function processRenewalWalletPayment($user, $originalOrderId, $messageId)
+    {
+        $originalOrder = $user->orders()->with('plan')->find($originalOrderId);
+        if (!$originalOrder || !$originalOrder->plan || $originalOrder->status !== 'paid') {
+            $this->sendOrEditMainMenu($user->telegram_chat_id, "❌ سرویس مورد نظر برای تمدید یافت نشد.", $messageId);
+            return;
+        }
+
+        $plan = $originalOrder->plan;
+        if ($user->balance < $plan->price) {
+            $this->sendOrEditMessage($user->telegram_chat_id, "❌ موجودی کیف پول شما برای تمدید کافی نیست.", Keyboard::make()->inline()->row([Keyboard::inlineButton(['text' => '💳 شارژ کیف پول', 'callback_data' => '/deposit']), Keyboard::inlineButton(['text' => '⬅️ بازگشت', 'callback_data' => '/my_services'])]), $messageId);
+            return;
+        }
+
+        $newRenewalOrder = null;
+        $newExpiryDate = null;
+        try {
+            DB::transaction(function () use ($user, $originalOrder, $plan, &$newRenewalOrder, &$newExpiryDate) {
+                $user->decrement('balance', $plan->price);
+
+                $newRenewalOrder = $user->orders()->create([
+                    'plan_id' => $plan->id, 'status' => 'paid', 'source' => 'telegram_renewal',
+                    'amount' => $plan->price, 'expires_at' => null,
+                    'renews_order_id' => $originalOrder->id, 'payment_method' => 'wallet',
+                ]);
+
+                Transaction::create([
+                    'user_id' => $user->id, 'order_id' => $newRenewalOrder->id, 'amount' => -$plan->price,
+                    'type' => 'purchase', 'status' => 'completed',
+                    'description' => "تمدید سرویس {$plan->name} (سفارش اصلی #{$originalOrder->id})"
+                ]);
+
+                $newExpiryDate = $this->renewUserAccount($originalOrder, $plan);
+                if (!$newExpiryDate) {
+                    throw new \Exception('Failed to update user on the panel.');
+                }
+
+                $originalOrder->update(['expires_at' => $newExpiryDate]);
+            });
+
+            $newExpiryDateCarbon = Carbon::parse($newExpiryDate);
+            $successMessage = $this->escape("✅ سرویس شما با موفقیت برای {$plan->duration_days} روز دیگر تمدید شد و تا تاریخ {$newExpiryDateCarbon->format('Y/m/d')} اعتبار دارد.");
+            $this->sendOrEditMainMenu($user->telegram_chat_id, $successMessage, $messageId);
+
+        } catch (\Exception $e) {
+            Log::error('Renewal Wallet Payment Failed: ' . $e->getMessage(), ['trace' => $e->getTraceAsString(), 'original_order_id' => $originalOrderId]);
+            if ($newRenewalOrder) {
+                try { $user->increment('balance', $plan->price); } catch (\Exception $refundEx) { Log::error("Failed to refund user: ".$refundEx->getMessage()); }
+            }
+            $this->sendOrEditMessage($user->telegram_chat_id, "⚠️ تمدید با کیف پول با خطا مواجه شد. مبلغ به کیف پول بازگردانده شد. لطفاً با پشتیبانی تماس بگیرید.", Keyboard::make()->inline()->row([Keyboard::inlineButton(['text' => '💬 پشتیبانی', 'callback_data' => '/support_menu'])]), $messageId);
+        }
+    }
+
+    protected function handleRenewCardPayment($user, $originalOrderId, $messageId)
+    {
+        $originalOrder = $user->orders()->with('plan')->find($originalOrderId);
+        if (!$originalOrder || !$originalOrder->plan || $originalOrder->status !== 'paid') {
+            $this->sendOrEditMainMenu($user->telegram_chat_id, "❌ سرویس مورد نظر برای تمدید یافت نشد.", $messageId);
+            return;
+        }
+        $plan = $originalOrder->plan;
+
+        $newRenewalOrder = $user->orders()->create([
+            'plan_id' => $plan->id, 'status' => 'pending', 'source' => 'telegram_renewal',
+            'amount' => $plan->price, 'expires_at' => null,
+            'renews_order_id' => $originalOrder->id,
+        ]);
+
+        $this->sendCardPaymentInfo($user->telegram_chat_id, $newRenewalOrder->id, $messageId);
+    }
+
+    protected function renewUserAccount(Order $originalOrder, Plan $plan)
+    {
+        $settings = $this->settings;
+        $user = $originalOrder->user;
+        $uniqueUsername = "user-{$user->id}-order-{$originalOrder->id}";
+
+        $currentExpiresAt = Carbon::parse($originalOrder->expires_at);
+        $baseDate = $currentExpiresAt->isPast() ? now() : $currentExpiresAt;
+        $newExpiryDate = $baseDate->copy()->addDays($plan->duration_days);
+        $newExpiryTimestamp = $newExpiryDate->timestamp;
+        $newDataLimitBytes = $plan->data_limit_gb * 1024 * 1024 * 1024;
+
+        try {
+            if (($settings->get('panel_type') ?? 'marzban') === 'marzban') {
+                $marzban = new MarzbanService($settings->get('marzban_host'), $settings->get('marzban_sudo_username'), $settings->get('marzban_sudo_password'), $settings->get('marzban_node_hostname'));
+
+                $updateResponse = $marzban->updateUser($uniqueUsername, [
+                    'expire' => $newExpiryTimestamp,
+                    'data_limit' => $newDataLimitBytes,
+                ]);
+                $resetResponse = $marzban->resetUserTraffic($uniqueUsername);
+
+                if ($updateResponse !== null && $resetResponse !== null) {
+                    Log::info("Marzban user renewed successfully.", ['username' => $uniqueUsername]);
+                    return $newExpiryDate;
+                } else {
+                    Log::error('Marzban user renewal failed.', ['username' => $uniqueUsername, 'update' => $updateResponse, 'reset' => $resetResponse]);
+                    return null;
+                }
+
+            } elseif ($settings->get('panel_type') === 'xui') {
+                $inboundId = $settings->get('xui_default_inbound_id');
+                if (!$inboundId) throw new \Exception("XUI Inbound ID not set.");
+
+                $xui = new XUIService($settings->get('xui_host'), $settings->get('xui_user'), $settings->get('xui_pass'));
+
+                // Placeholder: Logic to find and update XUI client
+                Log::warning('XUI user renewal (update/reset) needs specific implementation for your panel API.', ['username' => $uniqueUsername]);
+                $success = true; // Assume success for placeholder
+
+                if ($success) {
+                    return $newExpiryDate;
+                } else {
+                    Log::error('XUI user renewal update failed.', ['username' => $uniqueUsername]);
+                    return null;
+                }
+            }
+        } catch (\Exception $e) {
+            Log::error("Failed to renew user account {$uniqueUsername} on panel: " . $e->getMessage());
+            return null;
+        }
+        return null;
+    }
+
+    //======================================================================
+    // 5. Ticket & Support Methods
+    //======================================================================
+
+    protected function showSupportMenu($user, $messageId = null)
+    {
+        $tickets = $user->tickets()->latest()->take(4)->get();
+        $message = "💬 *پشتیبانی*\n\n";
+        if ($tickets->isEmpty()) {
+            $message .= "شما تاکنون هیچ تیکتی ثبت نکرده‌اید.";
+        } else {
+            $message .= "لیست آخرین تیکت‌های شما:\n";
+            foreach ($tickets as $ticket) {
+                $status = match ($ticket->status) {
+                    'open' => '🔵 باز',
+                    'answered' => '🟢 پاسخ ادمین',
+                    'closed' => '⚪️ بسته',
+                    default => '⚪️ نامشخص',
+                };
+                $ticketIdEscaped = $this->escape((string)$ticket->id);
+                $message .= "\n📌 *تیکت \\#{$ticketIdEscaped}* | " . $this->escape($status) . "\n";
+                $message .= "*موضوع:* " . $this->escape($ticket->subject) . "\n";
+                $message .= "_{$this->escape($ticket->updated_at->diffForHumans())}_";
+            }
+        }
+
+        $keyboard = Keyboard::make()->inline()->row([Keyboard::inlineButton(['text' => '📝 ایجاد تیکت جدید', 'callback_data' => '/support_new'])]);
+        foreach ($tickets as $ticket) {
+            if ($ticket->status !== 'closed') {
+                $keyboard->row([
+                    Keyboard::inlineButton(['text' => "✏️ پاسخ/مشاهده تیکت #{$ticket->id}", 'callback_data' => "reply_ticket_{$ticket->id}"]),
+                    Keyboard::inlineButton(['text' => "❌ بستن تیکت #{$ticket->id}", 'callback_data' => "close_ticket_{$ticket->id}"]),
+                ]);
+            }
+        }
+        $keyboard->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت به منوی اصلی', 'callback_data' => '/start'])]);
+        $this->sendOrEditMessage($user->telegram_chat_id, $message, $keyboard, $messageId);
+    }
+
+    protected function promptForNewTicket($user, $messageId)
+    {
+        $user->update(['bot_state' => 'awaiting_new_ticket_subject']);
+        $keyboard = Keyboard::make()->inline()->row([Keyboard::inlineButton(['text' => '❌ انصراف', 'callback_data' => '/cancel_action'])]);
+        $this->sendOrEditMessage($user->telegram_chat_id, "📝 لطفاً *موضوع* تیکت جدید را در یک پیام ارسال کنید:", $keyboard, $messageId);
+    }
+
+    protected function promptForTicketReply($user, $ticketId, $messageId)
+    {
+        $ticketIdEscaped = $this->escape($ticketId);
+        $user->update(['bot_state' => 'awaiting_ticket_reply|' . $ticketId]);
+        $keyboard = Keyboard::make()->inline()->row([Keyboard::inlineButton(['text' => '❌ انصراف', 'callback_data' => '/cancel_action'])]);
+        $this->sendOrEditMessage($user->telegram_chat_id, "✏️ لطفاً پاسخ خود را برای تیکت \\#{$ticketIdEscaped} وارد کنید (می‌توانید عکس هم ارسال کنید):", $keyboard, $messageId);
+    }
+
+    protected function closeTicket($user, $ticketId, $messageId, $callbackQueryId)
+    {
+        $ticket = $user->tickets()->where('id', $ticketId)->first();
+        if ($ticket && $ticket->status !== 'closed') {
+            $ticket->update(['status' => 'closed']);
+            try {
+                Telegram::answerCallbackQuery([
+                    'callback_query_id' => $callbackQueryId,
+                    'text' => "تیکت #{$ticketId} بسته شد.",
+                    'show_alert' => false
+                ]);
+            } catch (\Exception $e) { Log::warning("Could not answer close ticket query: ".$e->getMessage());}
+            $this->showSupportMenu($user, $messageId); // Refresh menu
+        } else {
+            try { Telegram::answerCallbackQuery(['callback_query_id' => $callbackQueryId, 'text' => "تیکت یافت نشد یا قبلا بسته شده.", 'show_alert' => true]); } catch (\Exception $e) {}
+        }
+    }
+
+
+    protected function processTicketConversation($user, $text, $update)
+    {
+        $state = $user->bot_state;
+        $chatId = $user->telegram_chat_id;
+
+        try {
+            if ($state === 'awaiting_new_ticket_subject') {
+                if (mb_strlen($text) < 3) {
+                    Telegram::sendMessage(['chat_id' => $chatId, 'text' => $this->escape("❌ موضوع باید حداقل ۳ حرف باشد. لطفا دوباره تلاش کنید."), 'parse_mode' => 'MarkdownV2']);
+                    return;
+                }
+                $user->update(['bot_state' => 'awaiting_new_ticket_message|' . $text]);
+                Telegram::sendMessage(['chat_id' => $chatId, 'text' => $this->escape("✅ موضوع دریافت شد.\n\nحالا *متن پیام* خود را وارد کنید (می‌توانید همراه پیام، عکس هم ارسال کنید):"), 'parse_mode' => 'MarkdownV2']);
+
+            } elseif (Str::startsWith($state, 'awaiting_new_ticket_message|')) {
+                $subject = Str::after($state, 'awaiting_new_ticket_message|');
+                $isPhotoOnly = $update->getMessage()->has('photo') && (empty(trim($text)) || $text === '[📎 فایل پیوست شد]');
+                $messageText = $isPhotoOnly ? '[📎 پیوست تصویر]' : $text;
+
+                if (empty(trim($messageText))) {
+                    Telegram::sendMessage(['chat_id' => $chatId, 'text' => $this->escape("❌ متن پیام نمی‌تواند خالی باشد. لطفا پیام خود را وارد کنید:"), 'parse_mode' => 'MarkdownV2']);
+                    return;
+                }
+
+                // 1. Create Ticket
+                $ticket = $user->tickets()->create([
+                    'subject' => $subject,
+                    'message' => $messageText, // Store initial text
+                    'priority' => 'medium', 'status' => 'open', 'source' => 'telegram', 'user_id' => $user->id
+                ]);
+
+                // 2. Create the first Reply
+                $replyData = ['user_id' => $user->id, 'message' => $messageText];
+                if ($update->getMessage()->has('photo')) {
+                    try { $replyData['attachment_path'] = $this->savePhotoAttachment($update, 'ticket_attachments'); }
+                    catch (\Exception $e) { Log::error("Error saving photo for new ticket {$ticket->id}: " . $e->getMessage()); }
+                }
+                $reply = $ticket->replies()->create($replyData);
+
+                // 3. Clear state and notify user
+                $user->update(['bot_state' => null]);
+                Telegram::sendMessage(['chat_id' => $chatId, 'text' => $this->escape("✅ تیکت #{$ticket->id} با موفقیت ثبت شد."), 'parse_mode' => 'MarkdownV2']);
+                $this->sendOrEditMainMenu($chatId, "پشتیبانی به زودی پاسخ شما را خواهد داد.");
+
+                // 4. Notify Admin (using TicketCreated event)
+                event(new TicketCreated($ticket));
+
+            } elseif (Str::startsWith($state, 'awaiting_ticket_reply|')) {
+                $ticketId = Str::after($state, 'awaiting_ticket_reply|');
+                $ticket = $user->tickets()->find($ticketId);
+
+                if (!$ticket) {
+                    $this->sendOrEditMainMenu($chatId, "❌ تیکت مورد نظر یافت نشد.");
+                    return;
+                }
+
+                $isPhotoOnly = $update->getMessage()->has('photo') && (empty(trim($text)) || $text === '[📎 فایل پیوست شد]');
+                $messageText = $isPhotoOnly ? '[📎 پیوست تصویر]' : $text;
+
+                if (empty(trim($messageText))) {
+                    Telegram::sendMessage(['chat_id' => $chatId, 'text' => $this->escape("❌ متن پاسخ نمی‌تواند خالی باشد."), 'parse_mode' => 'MarkdownV2']);
+                    return;
+                }
+
+                $replyData = ['user_id' => $user->id, 'message' => $messageText];
+                if ($update->getMessage()->has('photo')) {
+                    try { $replyData['attachment_path'] = $this->savePhotoAttachment($update, 'ticket_attachments'); }
+                    catch (\Exception $e) { Log::error("Error saving photo for ticket reply {$ticketId}: " . $e->getMessage()); }
+                }
+                $reply = $ticket->replies()->create($replyData);
+                $ticket->update(['status' => 'open']);
+
+                $user->update(['bot_state' => null]);
+                Telegram::sendMessage(['chat_id' => $chatId, 'text' => $this->escape("✅ پاسخ شما برای تیکت #{$ticketId} ثبت شد."), 'parse_mode' => 'MarkdownV2']);
+                $this->sendOrEditMainMenu($chatId, "پشتیبانی به زودی پاسخ شما را خواهد داد.");
+
+                event(new TicketReplied($reply)); // Fire event for admin notification
+            }
+        } catch (\Exception $e) {
+            Log::error('Failed to process ticket conversation: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
+            $user->update(['bot_state' => null]);
+            Telegram::sendMessage([
+                'chat_id' => $chatId,
+                'text' => $this->escape("❌ خطایی در پردازش پیام شما رخ داد. لطفاً دوباره تلاش کنید."),
+                'parse_mode' => 'MarkdownV2'
+            ]);
+        }
+    }
+
+
+    protected function savePhotoAttachment($update, $directory)
+    {
+        $photo = collect($update->getMessage()->getPhoto())->last();
+        if(!$photo) return null;
+
+        $botToken = $this->settings->get('telegram_bot_token');
+        try {
+            $file = Telegram::getFile(['file_id' => $photo->getFileId()]);
+            $filePath = method_exists($file, 'getFilePath') ? $file->getFilePath() : ($file['file_path'] ?? null);
+            if(!$filePath) { throw new \Exception('File path not found in Telegram response.'); }
+
+            $fileContents = file_get_contents("https://api.telegram.org/file/bot{$botToken}/{$filePath}");
+            if ($fileContents === false) { throw new \Exception('Failed to download file content.');}
+
+            Storage::disk('public')->makeDirectory($directory);
+            $extension = pathinfo($filePath, PATHINFO_EXTENSION) ?: 'jpg';
+            $fileName = $directory . '/' . Str::random(40) . '.' . $extension;
+            $success = Storage::disk('public')->put($fileName, $fileContents);
+
+            if (!$success) { throw new \Exception('Failed to save file to storage.'); }
+
+            return $fileName;
+
+        } catch (\Exception $e) {
+            Log::error('Error saving photo attachment: ' . $e->getMessage(), ['file_id' => $photo->getFileId()]);
+            return null;
+        }
+    }
+
+    //======================================================================
+    // 6. Helper Methods
+    //======================================================================
+
     /**
-     * تولید کیبورد اصلی ربات (منوی اصلی).
-     * @return Keyboard
+     * Escape text for Telegram's MarkdownV2 parse mode.
      */
-    protected function getMainMenuKeyboard()
+    protected function escape(string $text): string
+    {
+        $chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!'];
+        $text = str_replace('\\', '\\\\', $text); // Escape backslash first
+        return str_replace($chars, array_map(fn($char) => '\\' . $char, $chars), $text);
+    }
+
+    /**
+     * Get the main menu keyboard (Inline).
+     */
+    protected function getMainMenuKeyboard(): Keyboard
     {
         return Keyboard::make()->inline()
             ->row([
-                Keyboard::inlineButton(['text' => '🛒 خرید سرویس جدید', 'callback_data' => '/plans']),
-                Keyboard::inlineButton(['text' => '🛠 سرویس‌های من', 'callback_data' => '/my_services'])
+                Keyboard::inlineButton(['text' => '🛒 خرید سرویس', 'callback_data' => '/plans']),
+                Keyboard::inlineButton(['text' => '🛠 سرویس‌های من', 'callback_data' => '/my_services']),
             ])
             ->row([
-                Keyboard::inlineButton(['text' => '💰 کیف پول و شارژ حساب', 'callback_data' => '/wallet']),
-                Keyboard::inlineButton(['text' => '📚 آموزش اتصال', 'callback_data' => '/tutorials'])
+                Keyboard::inlineButton(['text' => '💰 کیف پول', 'callback_data' => '/wallet']),
+                Keyboard::inlineButton(['text' => '🎁 دعوت از دوستان', 'callback_data' => '/referral']),
             ])
             ->row([
-                Keyboard::inlineButton(['text' => '💬 پشتیبانی (تیکت)', 'callback_data' => '/support'])
+                Keyboard::inlineButton(['text' => '💬 پشتیبانی', 'callback_data' => '/support_menu']),
+                Keyboard::inlineButton(['text' => '📚 راهنمای اتصال', 'callback_data' => '/tutorials']),
             ]);
     }
 
     /**
-     * ارسال محتوای آموزشی بر اساس پلتفرم.
-     * @param string $platform
-     * @param int $chatId
+     * Send or edit the main menu message.
      */
-    protected function sendTutorial($platform, $chatId)
+    protected function sendOrEditMainMenu($chatId, $text, $messageId = null)
     {
-        $tutorials = [
-            'android' => [
-                'title' => "راهنمای اتصال اندروید 📱",
-                'text' => "برای اتصال در اندروید، اپلیکیشن *V2RayNG* را نصب کنید. لینک کانفیگ خود را کپی کرده و در این برنامه وارد نمایید. (آموزش کامل به زودی در وب‌سایت قرار می‌گیرد.)",
-                'app_link' => "https://play.google.com/store/apps/details?id=com.v2ray.android"
-            ],
-            'ios' => [
-                'title' => "راهنمای اتصال آیفون/آیپد 🍏",
-                'text' => "برای اتصال در iOS، اپلیکیشن *Fair VPN* یا *Streisand* را نصب کنید. سپس لینک سابسکریپشن خود را در آن وارد نمایید.",
-                'app_link' => "https://apps.apple.com/us/app/fair-vpn/id6446860086"
-            ],
-            'windows' => [
-                'title' => "راهنمای اتصال ویندوز 💻",
-                'text' => "برای اتصال در ویندوز، نرم‌افزار *V2RayN* را دانلود و نصب کنید. لینک کانفیگ را کپی کرده و در برنامه اضافه کنید.",
-                'app_link' => "لینک دانلود V2RayN از گیت‌هاب"
-            ],
-        ];
-
-        $info = $tutorials[$platform] ?? null;
-
-        if ($info) {
-            $message = "*{$info['title']}*\n\n{$info['text']}\n\n[لینک دانلود برنامه]({$info['app_link']})";
-
-            $keyboard = Keyboard::make()->inline()
-                ->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت به آموزش‌ها', 'callback_data' => '/tutorials'])]);
-
-            Telegram::sendMessage(['chat_id' => $chatId, 'text' => $message, 'parse_mode' => 'Markdown', 'reply_markup' => $keyboard]);
-        } else {
-            Telegram::sendMessage(['chat_id' => $chatId, 'text' => '❌ آموزش درخواستی یافت نشد.']);
-        }
+        $this->sendOrEditMessage($chatId, $text, $this->getMainMenuKeyboard(), $messageId);
     }
 
-    /**
-     * نمایش 5 تراکنش آخر کاربر.
-     * @param User $user
-     */
-    protected function sendTransactions($user)
+    protected function getReplyMainMenu(): Keyboard
     {
-        // محدود کردن به 5 تراکنش اخیر
-        $transactions = $user->transactions()->orderBy('created_at', 'desc')->take(5)->get();
-
-        if ($transactions->isEmpty()) {
-            $message = "📜 تاریخچه تراکنش‌های شما خالی است.";
-        } else {
-            $message = "📜 *۵ تراکنش اخیر شما:*\n\n";
-            foreach ($transactions as $transaction) {
-                $status = $transaction->status === 'completed' ? '✅ موفق' : '⚠️ در انتظار';
-                $type = $transaction->type === 'deposit' ? '💰 شارژ' : '🛒 خرید';
-                $message .= "--------------------------------------\n";
-                $message .= "💸 مبلغ: *" . number_format($transaction->amount) . " تومان*\n";
-                $message .= "🏷 نوع: *{$type}*\n";
-                $message .= "وضعیت: *{$status}*\n";
-                $message .= "توضیحات: {$transaction->description}\n";
-                $message .= "تاریخ: " . Carbon::parse($transaction->created_at)->format('Y/m/d H:i');
+        return Keyboard::make([
+            'keyboard' => [
+                ['🛒 خرید سرویس', '🛠 سرویس‌های من'],
+                ['💰 کیف پول', '📜 تاریخچه تراکنش‌ها'],
+                ['💬 پشتیبانی', '🎁 دعوت از دوستان'],
+                ['📚 راهنمای اتصال'],
+            ],
+            'resize_keyboard' => true,
+            'one_time_keyboard' => false
+        ]);
+    }
+    /**
+     * Centralized method to send or edit messages with proper error handling.
+     */
+    protected function sendOrEditMessage($chatId, $text, $keyboard, $messageId = null)
+    {
+        $payload = [
+            'chat_id'      => $chatId,
+            'text'         => $this->escape($text),
+            'parse_mode'   => 'MarkdownV2',
+            'reply_markup' => $keyboard
+        ];
+        try {
+            if ($messageId) {
+                $payload['message_id'] = $messageId;
+                Telegram::editMessageText($payload);
+            } else {
+                Telegram::sendMessage($payload);
+            }
+        } catch (\Telegram\Bot\Exceptions\TelegramResponseException $e) {
+            if (Str::contains($e->getMessage(), 'message is not modified')) {
+                Log::info("Message not modified.", ['chat_id' => $chatId]);
+            } elseif (Str::contains($e->getMessage(), ['message to edit not found', 'message identifier is not specified'])) {
+                Log::warning("Could not edit message {$messageId}. Sending new.", ['error' => $e->getMessage()]);
+                unset($payload['message_id']);
+                try { Telegram::sendMessage($payload); } catch (\Exception $e2) {Log::error("Failed to send new message after edit failure: " . $e2->getMessage());}
+            } else {
+                Log::error("Telegram API error: " . $e->getMessage(), ['payload' => $payload, 'trace' => $e->getTraceAsString()]);
+                if ($messageId) {
+                    unset($payload['message_id']);
+                    try { Telegram::sendMessage($payload); } catch (\Exception $e2) {Log::error("Failed to send new message after API error: " . $e2->getMessage());}
+                }
             }
         }
-
-        $keyboard = Keyboard::make()->inline()
-            ->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت به کیف پول', 'callback_data' => '/wallet'])]);
-
-        Telegram::sendMessage(['chat_id' => $user->telegram_chat_id, 'text' => $message, 'parse_mode' => 'Markdown', 'reply_markup' => $keyboard]);
+        catch (\Exception $e) {
+            Log::error("General error during send/edit message: " . $e->getMessage(), ['chat_id' => $chatId, 'trace' => $e->getTraceAsString()]);
+            if($messageId) {
+                unset($payload['message_id']);
+                try { Telegram::sendMessage($payload); } catch (\Exception $e2) {Log::error("Failed to send new message after general failure: " . $e2->getMessage());}
+            }
+        }
     }
 }
