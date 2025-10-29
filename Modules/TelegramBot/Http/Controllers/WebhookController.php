@@ -735,7 +735,8 @@ class WebhookController extends Controller
             });
 
             $successMessage = "✅ خرید شما با موفقیت انجام شد.\n\n";
-            $successMessage .= "لینک کانفیگ:\n`{$this->escape($order->config_details)}`";
+
+            $successMessage .= "لینک کانفیگ:\n`" . $order->config_details . "`";
             $this->sendOrEditMessage($user->telegram_chat_id, $successMessage, Keyboard::make()->inline()->row([Keyboard::inlineButton(['text' => '🛠 سرویس‌های من', 'callback_data' => '/my_services']), Keyboard::inlineButton(['text' => '🏠 منوی اصلی', 'callback_data' => '/start'])]), $messageId);
 
         } catch (\Exception $e) {
@@ -792,13 +793,21 @@ class WebhookController extends Controller
                     if ($inbound && $inbound->inbound_data) {
                         $inboundData = json_decode($inbound->inbound_data, true);
                         $linkType = $settings->get('xui_link_type', 'single');
-
                         if ($linkType === 'subscription') {
-                            $subId = $response['obj']['id'] ?? $uniqueUsername;
+                            $subId = $response['generated_subId'] ?? $uniqueUsername;
+
                             $subBaseUrl = rtrim($settings->get('xui_subscription_url_base'), '/');
-                            if($subBaseUrl){
+                            if ($subBaseUrl && $subId !== $uniqueUsername) {
                                 $configLink = $subBaseUrl . '/sub/' . $subId;
-                            } else { Log::error("XUI Subscription base URL is not set."); }
+                            } else {
+                                Log::error("XUI Subscription: base URL or subId missing.", [
+                                    'base_url' => $subBaseUrl,
+                                    'subId' => $subId,
+                                    'response' => $response
+                                ]);
+                                return null;
+                            }
+
                         } else {
                             $clientSettings = json_decode($response['obj']['settings'] ?? '{}', true);
                             $uuid = $clientSettings['clients'][0]['id'] ?? $response['obj']['id'] ?? null;
