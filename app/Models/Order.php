@@ -13,6 +13,7 @@ class Order extends Model
         'config_details',
         'amount',
         'source',
+        'panel_username',
 
     ];
 

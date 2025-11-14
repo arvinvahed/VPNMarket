@@ -9,8 +9,7 @@ use App\Services\XUIService;
 use App\Models\User;
 use App\Services\MarzbanService;
 use App\Models\Inbound;
-use Modules\Ticketing\Events\TicketCreated; // <-- use
-
+use Modules\Ticketing\Events\TicketCreated;
 use Modules\Ticketing\Models\Ticket;
 use Illuminate\Routing\Controller;
 use Illuminate\Http\Request;
@@ -29,9 +28,89 @@ class WebhookController extends Controller
 {
     protected $settings;
 
-    //======================================================================
-    // 1. Core Handlers
-    //======================================================================
+
+    public function sendBroadcastMessage(string $chatId, string $message): bool
+    {
+        try {
+            // --- Load Telegram Bot Token ---
+            if (!$this->settings) {
+                $this->settings = \App\Models\Setting::all()->pluck('value', 'key');
+            }
+
+            $botToken = $this->settings->get('telegram_bot_token');
+            if (!$botToken) {
+                \Log::error('❌ Cannot send broadcast message: bot token is not set.');
+                return false;
+            }
+
+            \Telegram\Bot\Laravel\Facades\Telegram::setAccessToken($botToken);
+
+            // --- Fancy Message Template ---
+            $title = "📢 *اعلان ویژه از سوی تیم مدیریت*";
+            $divider = str_repeat('━', 20);
+            $footer = "💠 *با تشکر از همراهی شما* 💠";
+
+            // Escape user message for MarkdownV2 safety
+            $formattedMessage = $this->escape($message);
+
+            // Combine all parts
+            $fullMessage = "{$title}\n\n{$divider}\n\n📝 *{$formattedMessage}*\n\n{$divider}\n\n{$footer}";
+
+            // --- Send Message ---
+            \Telegram\Bot\Laravel\Facades\Telegram::sendMessage([
+                'chat_id' => $chatId,
+                'text' => $fullMessage,
+                'parse_mode' => 'MarkdownV2',
+            ]);
+
+            \Log::info("✅ Broadcast message sent successfully to chat {$chatId}");
+            return true;
+        } catch (\Exception $e) {
+            \Log::warning("⚠️ Failed to send broadcast message to user {$chatId}: " . $e->getMessage());
+            return false;
+        }
+    }
+
+
+    public function sendSingleMessageToUser(string $chatId, string $message): bool
+    {
+        try {
+            // مطمئن شوید که تنظیمات و توکن ربات لود شده باشند
+            if (!$this->settings) {
+                $this->settings = \App\Models\Setting::all()->pluck('value', 'key');
+            }
+            $botToken = $this->settings->get('telegram_bot_token');
+            if (!$botToken) {
+                \Illuminate\Support\Facades\Log::error('Cannot send single Telegram message: bot token is not set.');
+                return false;
+            }
+            \Telegram\Bot\Laravel\Facades\Telegram::setAccessToken($botToken);
+
+
+            $header = "📢 *پیام فوری از مدیریت*";
+            $notice = "⚠️ این یک پیام اطلاع‌رسانی یک‌طرفه از پنل ادمین است و پاسخ دادن به آن در این چت، پیگیری نخواهد شد\\.";
+
+
+            $adminMessageLines = explode("\n", $message);
+            $formattedMessage = implode("\n", array_map(fn($line) => "> " . trim($line), $adminMessageLines));
+
+            $fullMessage = "{$header}\n\n{$this->escape($notice)}\n\n{$formattedMessage}";
+
+
+            \Telegram\Bot\Laravel\Facades\Telegram::sendMessage([
+                'chat_id' => $chatId,
+                'text' => $fullMessage,
+                'parse_mode' => 'MarkdownV2',
+            ]);
+
+            \Illuminate\Support\Facades\Log::info("Admin sent message to user {$chatId}.", ['message' => $message]);
+            return true;
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error('Failed to send single Telegram message: ' . $e->getMessage(), ['chat_id' => $chatId, 'message' => $message]);
+            return false;
+        }
+    }
+
 
     public function handle(Request $request)
     {
@@ -71,7 +150,7 @@ class WebhookController extends Controller
         $text = trim($message->getText() ?? '');
         $user = User::where('telegram_chat_id', $chatId)->first();
 
-        // --- بخش ایجاد کاربر جدید ---
+        // --- کاربر جدید ---
         if (!$user) {
             $userFirstName = $message->getFrom()->getFirstName() ?? 'کاربر';
             $password = Str::random(10);
@@ -83,7 +162,20 @@ class WebhookController extends Controller
                 'referral_code' => Str::random(8),
             ]);
 
+            // چک عضویت قبل از خوش‌آمدگویی
+            if (!$this->isUserMemberOfChannel($user)) {
+                $this->showChannelRequiredMessage($chatId);
+                return;
+            }
+
+
             $welcomeMessage = "🌟 خوش آمدید {$userFirstName} عزیز!\n\nبرای شروع، یکی از گزینه‌های منو را انتخاب کنید:";
+
+            // این چک تکراری بود و حذف شد (چون بالا چک شده)
+            // if (!$this->isUserMemberOfChannel($user)) {
+            //     $this->showChannelRequiredMessage($chatId);
+            //     return;
+            // }
 
             if (Str::startsWith($text, '/start ')) {
                 $referralCode = Str::after($text, '/start ');
@@ -115,6 +207,18 @@ class WebhookController extends Controller
             ]);
             return;
         }
+
+        // <<<---### اصلاحیه ۱: چک کردن عضویت برای *تمام* پیام‌های متنی ###--->>>
+        //
+        //  این بلاک، عضویت را برای کاربرانی که از قبل در ربات بوده‌اند
+        //  و دکمه‌های منوی اصلی (پیام متنی) را می‌زنند، چک می‌کند.
+        //
+        if (!$this->isUserMemberOfChannel($user)) {
+            $this->showChannelRequiredMessage($chatId);
+            return; // اجرای ادامه تابع متوقف می‌شود
+        }
+        // <<<---### پایان اصلاحیه ۱ ###--->>>
+
 
         // --- بخش مدیریت دکمه‌های منو ---
         if ($user->bot_state) {
@@ -148,6 +252,10 @@ class WebhookController extends Controller
             case '📚 راهنمای اتصال':
                 $this->sendTutorialsMenu($chatId);
                 break;
+            case '🧪 اکانت تست':
+                $this->handleTrialRequest($user);
+                break;
+
             case '/start':
                 Telegram::sendMessage([
                     'chat_id' => $chatId,
@@ -174,9 +282,24 @@ class WebhookController extends Controller
         $data = $callbackQuery->getData();
         $user = User::where('telegram_chat_id', $chatId)->first();
 
+        // چک عضویت
+        // این بخش به درستی کار می‌کند، چون تابع isUserMemberOfChannel اصلاح شده
+        if (!$user || !$this->isUserMemberOfChannel($user)) {
+            $this->showChannelRequiredMessage($chatId, $messageId);
+            Telegram::answerCallbackQuery([
+                'callback_query_id' => $callbackQuery->getId(),
+                'text' => 'ابتدا باید در کانال عضو شوید!',
+                'show_alert' => true
+            ]);
+            return;
+        }
+
         try {
             Telegram::answerCallbackQuery(['callback_query_id' => $callbackQuery->getId()]);
         } catch (\Exception $e) { Log::warning('Could not answer callback query: ' . $e->getMessage()); }
+
+        // این چک تکراری بود و حذف شد
+        // if (!$user || !$this->isUserMemberOfChannel($user)) { ... }
 
         if (!$user) {
             Telegram::sendMessage(['chat_id' => $chatId, 'text' => $this->escape("❌ کاربر یافت نشد. لطفاً با دستور /start ربات را مجدداً راه‌اندازی کنید."), 'parse_mode' => 'MarkdownV2']);
@@ -251,6 +374,31 @@ class WebhookController extends Controller
                 case '/tutorial_android': $this->sendTutorial('android', $chatId, $messageId); break;
                 case '/tutorial_ios': $this->sendTutorial('ios', $chatId, $messageId); break;
                 case '/tutorial_windows': $this->sendTutorial('windows', $chatId, $messageId); break;
+                case '/check_membership':
+                    if ($this->isUserMemberOfChannel($user)) {
+                        Telegram::answerCallbackQuery([
+                            'callback_query_id' => $callbackQuery->getId(),
+                            'text' => 'عضویت شما تأیید شد!',
+                            'show_alert' => false
+                        ]);
+                        // پیام قبلی را حذف کن
+                        try { Telegram::deleteMessage(['chat_id' => $chatId, 'message_id' => $messageId]); } catch (\Exception $e) {}
+
+                        Telegram::sendMessage([
+                            'chat_id' => $chatId,
+                            'text' => 'خوش آمدید! حالا می‌توانید از ربات استفاده کنید.',
+                            'reply_markup' => $this->getReplyMainMenu()
+                        ]);
+                    } else {
+                        Telegram::answerCallbackQuery([
+                            'callback_query_id' => $callbackQuery->getId(),
+                            'text' => 'هنوز عضو کانال نشده‌اید. لطفاً اول عضو شوید.',
+                            'show_alert' => true
+                        ]);
+                        $this->showChannelRequiredMessage($chatId, $messageId);
+                    }
+                    break;
+
                 case '/cancel_action':
                     $user->update(['bot_state' => null]);
                     // Delete the message with the inline keyboard
@@ -279,6 +427,12 @@ class WebhookController extends Controller
         $message = $update->getMessage();
         $chatId = $message->getChat()->getId();
         $user = User::where('telegram_chat_id', $chatId)->first();
+
+        // چک عضویت برای عکس‌ها
+        if (!$user || !$this->isUserMemberOfChannel($user)) {
+            $this->showChannelRequiredMessage($chatId);
+            return;
+        }
 
         if (!$user || !$user->bot_state) {
             $this->sendOrEditMainMenu($chatId, "❌ لطفاً ابتدا یک عملیات (مانند ثبت تیکت یا رسید) را شروع کنید.");
@@ -351,17 +505,32 @@ class WebhookController extends Controller
 
     protected function sendPlans($chatId, $messageId = null)
     {
-        $plans = Plan::where('is_active', true)->orderBy('price')->get();
+        // مرحله ۱: دریافت پلن‌ها با ترتیب صحیح (اول زمان، بعد حجم)
+        $plans = Plan::where('is_active', true)
+            ->orderBy('duration_days', 'asc')
+            ->orderBy('volume_gb', 'asc')
+            ->get();
+
         if ($plans->isEmpty()) {
             $keyboard = Keyboard::make()->inline()->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت', 'callback_data' => '/start'])]);
             $this->sendOrEditMessage($chatId, "⚠️ هیچ پلن فعالی در دسترس نیست.", $keyboard, $messageId);
             return;
         }
 
-        $message = "🛒 *لیست پلن‌های موجود*\n\nلطفاً پلن مورد نظر خود را برای خرید انتخاب کنید:";
+
+        $message = "🚀 *انتخاب سرویس VPN*\n\n";
+        $message .= "با خیال راحت، سرویس مورد نیاز خود را از بین پلن‌های زیر انتخاب کنید:\n\n";
+
+
+        $message .= "⚡️ سرعت بالا، امنیت بی‌نظیر و دسترسی جهانی با پلن‌های ما.\n";
+
+        $message .= "🎯 پلن‌ها به ترتیب زمان و حجم مرتب شده‌اند تا انتخاب آسان‌تر باشد.\n\n";
+        $message .= "👇 لطفاً پلن مورد نظر خود را برای خرید انتخاب کنید:\n\n";
         $keyboard = Keyboard::make()->inline();
+
         foreach ($plans as $plan) {
-            $planText = $this->escape("{$plan->name} | {$plan->data_limit_gb} گیگ | " . number_format($plan->price) . " تومان");
+            // مرحله ۲: ساخت متن دکمه با تمام اطلاعات صحیح (نام، حجم، زمان و قیمت)
+            $planText = $this->escape("💎 {$plan->name}  |  📦 {$plan->volume_gb} گیگ  |  ⏳ {$plan->duration_label}  |  💳 " . number_format($plan->price) . " تومان");
             $keyboard->row([
                 Keyboard::inlineButton(['text' => $planText, 'callback_data' => "buy_plan_{$plan->id}"]),
             ]);
@@ -406,9 +575,7 @@ class WebhookController extends Controller
             $canRenew = true;
 
             if ($expiresAt->isFuture()) {
-
-                $daysRemaining = (int) floor($now->diffInDays($expiresAt)); // به عدد صحیح تبدیل می‌کنیم
-
+                $daysRemaining = (int) floor($now->diffInDays($expiresAt));
                 $statusIcon = '🟢'; // فعال
                 $remainingText = "*" . $this->escape($daysRemaining . ' روز') . "* باقی‌مانده";
 
@@ -422,14 +589,22 @@ class WebhookController extends Controller
                 $message .= "〰️〰️〰️〰️〰️〰️〰️〰️〰️\n\n";
             }
 
+            // --- بخش کامل و اصلاح شده ---
             $message .= "{$statusIcon} *سرویس:* " . $this->escape($order->plan->name) . "\n";
+
+            // نمایش نام کاربری اگر وجود داشته باشد
+            if ($order->panel_username) {
+                $message .= "👤 *نام کاربری:* `" . $this->escape($order->panel_username) . "`\n";
+            }
+
             $message .= "🗓 *انقضا:* " . $this->escape($expiresAt->format('Y/m/d')) . " \\- " . $remainingText . "\n";
-            $message .= "📦 *حجم:* " . $this->escape($order->plan->data_limit_gb . ' گیگابایت') . "\n\n";
+            // *** استفاده از نام فیلد صحیح برای حجم ***
+            $message .= "📦 *حجم:* " . $this->escape($order->plan->volume_gb . ' گیگابایت') . "\n\n";
 
 
             if (!empty($order->config_details)) {
-
                 $message .= "🔗 *لینک اتصال:* \n`" . $order->config_details . "`\n";
+
             } else {
                 $message .= "⏳ در حال آماده‌سازی کانفیگ\\.\\.\\.\n";
             }
@@ -445,7 +620,6 @@ class WebhookController extends Controller
 
         $this->sendRawMarkdownMessageWithPreview($user->telegram_chat_id, $message, $keyboard, $messageId, true);
     }
-
 
     protected function sendRawMarkdownMessageWithPreview($chatId, $text, $keyboard, $messageId = null, $disablePreview = false)
     {
@@ -582,8 +756,8 @@ class WebhookController extends Controller
                         break;
                 }
 
-                // --- بخش تعیین وضعیت ---
-                $status = '⚪️'; // پیش‌فرض
+
+                $status = '⚪️';
                 switch ($transaction->status) {
                     case 'completed':
                         $status = '✅'; // موفق
@@ -667,9 +841,7 @@ class WebhookController extends Controller
     }
 
 
-    //======================================================================
-    // 3. Purchase & Payment Methods
-    //======================================================================
+
 
     protected function startPurchaseProcess($user, $planId, $messageId)
     {
@@ -726,16 +898,24 @@ class WebhookController extends Controller
                     'description' => "خرید سرویس {$plan->name} از کیف پول"
                 ]);
 
-                $config = $this->provisionUserAccount($order, $plan);
-                if ($config) {
-                    $order->update(['config_details' => $config]);
+                // ۱. تابع فقط یک بار فراخوانی می‌شود
+                $provisionData = $this->provisionUserAccount($order, $plan);
+
+                // ۲. نتیجه چک شده و دیتابیس فقط یک بار آپدیت می‌شود
+                if ($provisionData && $provisionData['link']) {
+                    $order->update([
+                        'config_details' => $provisionData['link'],
+                        'panel_username' => $provisionData['username']
+                    ]);
                 } else {
-                    throw new \Exception('Provisioning failed, config is null.');
+                    throw new \Exception('Provisioning failed, config data is null.');
                 }
             });
 
-            $successMessage = "✅ خرید شما با موفقیت انجام شد.\n\n";
 
+            $order->refresh();
+
+            $successMessage = "✅ خرید شما با موفقیت انجام شد.\n\n";
             $successMessage .= "لینک کانفیگ:\n`" . $order->config_details . "`";
             $this->sendOrEditMessage($user->telegram_chat_id, $successMessage, Keyboard::make()->inline()->row([Keyboard::inlineButton(['text' => '🛠 سرویس‌های من', 'callback_data' => '/my_services']), Keyboard::inlineButton(['text' => '🏠 منوی اصلی', 'callback_data' => '/start'])]), $messageId);
 
@@ -755,10 +935,11 @@ class WebhookController extends Controller
         }
     }
 
+
     protected function provisionUserAccount(Order $order, Plan $plan)
     {
         $settings = $this->settings;
-        $configLink = null;
+        $configData = ['link' => null, 'username' => null];
         $uniqueUsername = "user-{$order->user_id}-order-{$order->id}";
 
         try {
@@ -768,70 +949,92 @@ class WebhookController extends Controller
                     'username' => $uniqueUsername,
                     'proxies' => (object) [],
                     'expire' => $order->expires_at->timestamp,
-                    'data_limit' => $plan->data_limit_gb * 1024 * 1024 * 1024,
+                    'data_limit' => $plan->volume_gb * 1024 * 1024 * 1024,
                 ]);
                 if (!empty($response['subscription_url'])) {
-                    $configLink = $response['subscription_url'];
+                    $configData['link'] = $response['subscription_url'];
+                    $configData['username'] = $uniqueUsername;
                 } else {
                     Log::error('Marzban user creation failed or subscription URL missing.', ['response' => $response]);
                     return null;
                 }
             } elseif ($settings->get('panel_type') === 'xui') {
-                $inboundId = $settings->get('xui_default_inbound_id');
-                if (!$inboundId) { Log::error("XUI Inbound ID is not set in settings."); return null; }
+                 $inboundPanelId = (int) $settings->get('xui_default_inbound_id');
 
-                $xui = new XUIService($settings->get('xui_host'), $settings->get('xui_user'), $settings->get('xui_pass'));
+                 $inboundModel = \App\Models\Inbound::whereJsonContains('inbound_data->id', $inboundPanelId)->first();
+
+                if (!$inboundPanelId || !$inboundModel) {
+                    Log::error("XUI Inbound Model not found or ID not set. Panel ID: {$inboundPanelId}");
+                    return null;
+                }
+
+                $xui = new \App\Services\XUIService($settings->get('xui_host'), $settings->get('xui_user'), $settings->get('xui_pass'));
                 $clientData = [
                     'email' => $uniqueUsername,
                     'total' => $plan->data_limit_gb * 1024 * 1024 * 1024,
                     'expiryTime' => $order->expires_at->timestamp * 1000,
                 ];
-                $response = $xui->addClient($inboundId, $clientData);
+
+                // --- 3. ارسال ID واقعی پنل به سرویس XUI ---
+                $response = $xui->addClient($inboundPanelId, $clientData);
 
                 if ($response && isset($response['success']) && $response['success']) {
-                    $inbound = Inbound::find($inboundId);
-                    if ($inbound && $inbound->inbound_data) {
-                        $inboundData = json_decode($inbound->inbound_data, true);
-                        $linkType = $settings->get('xui_link_type', 'single');
-                        if ($linkType === 'subscription') {
-                            $subId = $response['generated_subId'] ?? $uniqueUsername;
+                    // چون در مدل Inbound، inbound_data به آرایه Cast شده است:
+                    $inboundData = $inboundModel->inbound_data;
 
-                            $subBaseUrl = rtrim($settings->get('xui_subscription_url_base'), '/');
-                            if ($subBaseUrl && $subId !== $uniqueUsername) {
-                                $configLink = $subBaseUrl . '/sub/' . $subId;
-                            } else {
-                                Log::error("XUI Subscription: base URL or subId missing.", [
-                                    'base_url' => $subBaseUrl,
-                                    'subId' => $subId,
-                                    'response' => $response
-                                ]);
-                                return null;
+                    $linkType = $settings->get('xui_link_type', 'single');
+
+                    if ($linkType === 'subscription') {
+                        $subId = $response['generated_subId'] ?? $uniqueUsername;
+
+                        $subBaseUrl = rtrim($settings->get('xui_subscription_url_base'), '/');
+                        if ($subBaseUrl && $subId !== $uniqueUsername) {
+                            $configLink = $subBaseUrl . '/sub/' . $subId;
+                        } else {
+                            Log::error("XUI Subscription: base URL or subId missing.", [
+                                'base_url' => $subBaseUrl,
+                                'subId' => $subId,
+                                'response' => $response
+                            ]);
+                            return null;
+                        }
+
+                    } else {
+                        // ساخت لینک تکی
+                        $clientSettings = json_decode($response['obj']['settings'] ?? '{}', true);
+                        $uuid = $clientSettings['clients'][0]['id'] ?? $response['obj']['id'] ?? null;
+
+                        if ($uuid){
+                            $streamSettings = $inboundData['streamSettings'] ?? [];
+                            $serverAddress = $settings->get('server_address_for_link', parse_url($settings->get('xui_host'), PHP_URL_HOST));
+                            $port = $inboundData['port'] ?? 443;
+                            $remark = $plan->name;
+                            $params = [];
+
+                            // بر اساس JSON شما: network=tcp و security=tls و protocol=vless
+                            $params['type'] = $streamSettings['network'] ?? 'tcp';
+                            $params['security'] = $streamSettings['security'] ?? 'none';
+
+                            if($params['type'] === 'ws' && isset($streamSettings['wsSettings'])){
+                                $params['path'] = $streamSettings['wsSettings']['path'] ?? '/';
+                                $params['host'] = $streamSettings['wsSettings']['headers']['Host'] ?? $serverAddress;
                             }
 
-                        } else {
-                            $clientSettings = json_decode($response['obj']['settings'] ?? '{}', true);
-                            $uuid = $clientSettings['clients'][0]['id'] ?? $response['obj']['id'] ?? null;
+                            if($params['security'] === 'tls' && isset($streamSettings['tlsSettings'])){
+                                $params['sni'] = $streamSettings['tlsSettings']['serverName'] ?? $serverAddress;
+                            }
 
-                            if ($uuid){
-                                $streamSettings = json_decode($inboundData['streamSettings'] ?? '{}', true);
-                                $serverAddress = $settings->get('server_address_for_link', parse_url($settings->get('xui_host'), PHP_URL_HOST));
-                                $port = $inboundData['port'] ?? 443;
-                                $remark = $plan->name;
-                                $params = [];
-                                $params['type'] = $streamSettings['network'] ?? 'ws';
-                                $params['security'] = $streamSettings['security'] ?? 'none';
-                                if($params['type'] === 'ws' && isset($streamSettings['wsSettings'])){
-                                    $params['path'] = $streamSettings['wsSettings']['path'] ?? '/';
-                                    $params['host'] = $streamSettings['wsSettings']['headers']['Host'] ?? $serverAddress;
-                                }
-                                if($params['security'] === 'tls' && isset($streamSettings['tlsSettings'])){
-                                    $params['sni'] = $streamSettings['tlsSettings']['serverName'] ?? $serverAddress;
-                                }
-                                $queryString = http_build_query(array_filter($params));
-                                $configLink = "vless://{$uuid}@{$serverAddress}:{$port}?{$queryString}#" . urlencode($remark . " - " . $uniqueUsername);
-                            } else { Log::error('Could not extract UUID from XUI response.', ['response' => $response]); }
-                        }
-                    } else { Log::error('Inbound data not found for ID: ' . $inboundId); }
+                            // افزودن flow (اگر VLESS باشد و در تنظیمات کلاینت موجود باشد)
+                            $flow = $clientSettings['clients'][0]['flow'] ?? '';
+                            if ($flow) {
+                                $params['flow'] = $flow;
+                            }
+
+                            $queryString = http_build_query(array_filter($params));
+                            $configLink = "vless://{$uuid}@{$serverAddress}:{$port}?{$queryString}#" . urlencode($remark . " - " . $uniqueUsername);
+
+                        } else { Log::error('Could not extract UUID from XUI response.', ['response' => $response]); }
+                    }
                 } else {
                     Log::error('XUI user creation failed.', ['response' => $response]);
                     return null;
@@ -841,7 +1044,8 @@ class WebhookController extends Controller
             Log::error("Failed to provision account for Order {$order->id}: " . $e->getMessage());
             return null;
         }
-        return $configLink;
+
+        return $configData;
     }
 
     protected function showDepositOptions($user, $messageId)
@@ -919,14 +1123,16 @@ class WebhookController extends Controller
         $this->sendRawMarkdownMessage($chatId, $message, $keyboard, $messageId);
     }
 
-    protected function sendRawMarkdownMessage($chatId, $text, $keyboard, $messageId = null)
+    protected function sendRawMarkdownMessage($chatId, $text, $keyboard, $messageId = null, $disablePreview = false)
     {
         $payload = [
-            'chat_id'      => $chatId,
-            'text'         => $text,
-            'parse_mode'   => 'MarkdownV2',
-            'reply_markup' => $keyboard
+            'chat_id' => $chatId,
+            'text' => $text,
+            'parse_mode' => 'MarkdownV2',
+            'reply_markup' => $keyboard,
+            'disable_web_page_preview' => $disablePreview
         ];
+
         try {
             if ($messageId) {
                 $payload['message_id'] = $messageId;
@@ -935,18 +1141,14 @@ class WebhookController extends Controller
                 Telegram::sendMessage($payload);
             }
         } catch (\Exception $e) {
-            Log::error("Error in sendRawMarkdownMessage: " . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
-
-            if ($messageId && \Illuminate\Support\Str::contains($e->getMessage(), 'message to edit not found')) {
+            if ($messageId && Str::contains($e->getMessage(), 'not found')) {
                 unset($payload['message_id']);
-                try { Telegram::sendMessage($payload); } catch (\Exception $e2) { Log::error("Fallback sendRaw failed: " . $e2->getMessage()); }
+                Telegram::sendMessage($payload);
             }
         }
     }
 
-    //======================================================================
-    // 4. Renewal Methods
-    //======================================================================
+
 
     protected function startRenewalPurchaseProcess($user, $originalOrderId, $messageId)
     {
@@ -1265,6 +1467,124 @@ class WebhookController extends Controller
         }
     }
 
+    protected function isUserMemberOfChannel($user)
+    {
+        $forceJoin = $this->settings->get('force_join_enabled', '0');
+        if ($forceJoin !== '1') {
+            return true;
+        }
+
+        $channelId = $this->settings->get('telegram_required_channel_id');
+        if (!$channelId) {
+            Log::warning('Force join is enabled, but no "telegram_required_channel_id" is set in settings.');
+            return true;
+        }
+
+        try {
+            Log::info("DEBUG: Attempting getChatMember", [
+                'chat_id' => $channelId,
+                'user_id' => $user->telegram_chat_id
+            ]);
+
+
+            $response = Telegram::getChatMember([
+                'chat_id' => $channelId,
+                'user_id' => $user->telegram_chat_id
+            ]);
+
+
+            if (!$response) {
+                Log::error("DEBUG: getChatMember returned a NULL or FALSE response.");
+                return false;
+            }
+
+
+            $responseData = $response->toArray();
+            Log::info("DEBUG: Raw Response Object Data", [
+                'data' => $responseData
+            ]);
+
+
+            $status = $responseData['status'] ?? null;
+
+            if ($status === null) {
+                Log::warning("DEBUG: 'status' property was NULL or not found in the raw response.", [
+                    'response_data' => $responseData
+                ]);
+                return false;
+            }
+
+            Log::info("DEBUG: User status received (from raw data)", [
+                'chat_id' => $channelId,
+                'user_id' => $user->telegram_chat_id,
+                'status' => $status
+            ]);
+
+            // 5. چک کردن وضعیت
+            return in_array($status, ['member', 'administrator', 'creator']);
+
+        } catch (\Exception $e) {
+
+            Log::error("EXCEPTION during getChatMember: " . $e->getMessage(), [
+                'chat_id' => $channelId,
+                'user_id' => $user->telegram_chat_id,
+                'trace' => $e->getTraceAsString() // لاگ کامل خطا برای خطایابی
+            ]);
+
+            return false;
+        }
+    }
+
+
+
+    protected function showChannelRequiredMessage($chatId, $messageId = null)
+    {
+        // آی‌دی کانال را از تنظیمات می‌خواند (چه @username باشد چه -100...)
+        $channelId = $this->settings->get('telegram_required_channel_id');
+
+        if (!$channelId) {
+            // اگر کانالی در تنظیمات ست نشده بود
+            $this->sendOrEditMessage($chatId, "خطایی در تنظیمات ربات رخ داده است. لطفا با ادمین تماس بگیرید.", null, $messageId);
+            return;
+        }
+
+        $channelLink = null;
+        $channelName = $channelId; // اسم پیش‌فرض
+
+        if (str_starts_with($channelId, '@')) {
+            // این یک کانال عمومی با یوزرنیم است
+            $username = ltrim($channelId, '@');
+            $channelLink = "https://t.me/{$username}";
+            $channelName = $channelId;
+        } elseif (str_starts_with($channelId, '-100')) {
+            // این یک کانال خصوصی با چت آی‌دی است
+            // ما نمی‌توانیم لینک جوین بسازیم، پس فقط نام "کانال" را نمایش می‌دهیم
+            $channelName = "کانال مورد نیاز";
+            // نکته: اگر می‌خواهید دکمه لینک برای کانال خصوصی هم باشد، باید
+            // یک فیلد جدید در ThemeSettings.php برای "لینک دعوت" بسازید.
+        } else {
+            // فرمت ناشناخته است
+            $this->sendOrEditMessage($chatId, "خطایی در تنظیمات ربات رخ داده است. فرمت آی‌دی کانال نامعتبر است.", null, $messageId);
+            return;
+        }
+
+        // پیام را می‌سازد
+        $message = "برای استفاده از ربات، ابتدا باید در کانال زیر عضو شوید:\n\n";
+        $message .= $this->escape($channelName) . "\n\n"; // از نام کانال استفاده می‌کند
+        $message .= "پس از عضویت، روی دکمه «بررسی عضویت» بزنید.";
+
+        $keyboard = Keyboard::make()->inline();
+
+        // فقط اگر لینک معتبر داریم (یعنی کانال عمومی است)، دکمه لینک را نشان بده
+        if ($channelLink) {
+            $keyboard->row([Keyboard::inlineButton(['text' => 'عضویت در کانال', 'url' => $channelLink])]);
+        }
+
+        // دکمه بررسی عضویت همیشه هست
+        $keyboard->row([Keyboard::inlineButton(['text' => '✅ بررسی عضویت', 'callback_data' => '/check_membership'])]);
+
+        $this->sendOrEditMessage($chatId, $message, $keyboard, $messageId);
+    }
 
     protected function savePhotoAttachment($update, $directory)
     {
@@ -1344,12 +1664,136 @@ class WebhookController extends Controller
                 ['🛒 خرید سرویس', '🛠 سرویس‌های من'],
                 ['💰 کیف پول', '📜 تاریخچه تراکنش‌ها'],
                 ['💬 پشتیبانی', '🎁 دعوت از دوستان'],
-                ['📚 راهنمای اتصال'],
+                ['📚 راهنمای اتصال', '🧪 اکانت تست'],
+
             ],
             'resize_keyboard' => true,
             'one_time_keyboard' => false
         ]);
     }
+
+
+
+    protected function handleTrialRequest($user)
+    {
+
+        $settings = Setting::all()->pluck('value', 'key');
+        $chatId = $user->telegram_chat_id;
+
+
+        if (($settings->get('trial_enabled') ?? '0') !== '1') {
+            Telegram::sendMessage(['chat_id' => $chatId, 'text' => $this->escape('❌ قابلیت دریافت اکانت تست در حال حاضر غیرفعال است.')]);
+            return;
+        }
+
+
+        $limit = (int) $settings->get('trial_limit_per_user', 1);
+        if ($user->trial_accounts_taken >= $limit) {
+            Telegram::sendMessage(['chat_id' => $chatId, 'text' => $this->escape('❗️شما قبلاً از اکانت تست خود استفاده کرده‌اید و دیگر مجاز به دریافت آن نیستید.')]);
+            return;
+        }
+
+        try {
+
+            $volumeMB = (int) $settings->get('trial_volume_mb', 500);
+            $durationHours = (int) $settings->get('trial_duration_hours', 24);
+
+            $uniqueUsername = "trial-{$user->id}-" . ($user->trial_accounts_taken + 1);
+            $expiresAt = now()->addHours($durationHours);
+            $dataLimitBytes = $volumeMB * 1024 * 1024;
+
+            $panelType = $settings->get('panel_type');
+            $configLink = null;
+
+            // ۵. تصمیم‌گیری بر اساس نوع پنل
+            if ($panelType === 'marzban') {
+                $marzbanService = new MarzbanService($settings->get('marzban_host'), $settings->get('marzban_sudo_username'), $settings->get('marzban_sudo_password'), $settings->get('marzban_node_hostname'));
+                $response = $marzbanService->createUser([
+                    'username' => $uniqueUsername,
+                    'expire' => $expiresAt->timestamp,
+                    'data_limit' => $dataLimitBytes,
+                ]);
+
+                if ($response && !empty($response['subscription_url'])) {
+                    $configLink = $response['subscription_url'];
+                } else {
+                    throw new \Exception('خطا در ارتباط با پنل مرزبان.');
+                }
+
+            } elseif ($panelType === 'xui') {
+                $xuiService = new XUIService($settings->get('xui_host'), $settings->get('xui_user'), $settings->get('xui_pass'));
+                $inbound = Inbound::find($settings->get('xui_default_inbound_id'));
+
+                if (!$inbound || !$inbound->inbound_data) {
+                    throw new \Exception('اطلاعات اینباند پیش‌فرض برای X-UI یافت نشد.');
+                }
+                if (!$xuiService->login()) {
+                    throw new \Exception('خطا در لاگین به پنل X-UI.');
+                }
+
+                $inboundData = json_decode($inbound->inbound_data, true);
+                $clientData = [
+                    'email' => $uniqueUsername,
+                    'total' => $dataLimitBytes,
+                    'expiryTime' => $expiresAt->timestamp * 1000,
+                ];
+
+                $response = $xuiService->addClient($inboundData['id'], $clientData);
+
+                if ($response && isset($response['success']) && $response['success']) {
+
+                    $uuid = $response['generated_uuid'] ?? null;
+                    if(!$uuid) {
+
+                        $clientSettings = json_decode($response['obj']['settings'] ?? '{}', true);
+                        $uuid = $clientSettings['clients'][0]['id'] ?? null;
+                    }
+                    if (!$uuid) throw new \Exception('UUID از پاسخ X-UI استخراج نشد.');
+
+                    $streamSettings = json_decode($inboundData['streamSettings'], true);
+                    $serverAddress = $settings->get('server_address_for_link', parse_url($settings->get('xui_host'), PHP_URL_HOST));
+                    $port = $inboundData['port'];
+                    $remark = "Trial Account";
+                    $paramsArray = [
+                        'type' => $streamSettings['network'] ?? null,
+                        'security' => $streamSettings['security'] ?? null,
+                        'path' => $streamSettings['wsSettings']['path'] ?? ($streamSettings['grpcSettings']['serviceName'] ?? null),
+                        'sni' => $streamSettings['tlsSettings']['serverName'] ?? null,
+                        'host' => $streamSettings['wsSettings']['headers']['Host'] ?? null,
+                    ];
+                    $params = http_build_query(array_filter($paramsArray));
+                    $configLink = "vless://{$uuid}@{$serverAddress}:{$port}?{$params}#" . urlencode($remark . " - " . $uniqueUsername);
+                } else {
+                    throw new \Exception($response['msg'] ?? 'خطا در ساخت کاربر در پنل سنایی');
+                }
+            } else {
+                throw new \Exception('نوع پنل در تنظیمات مشخص نشده است.');
+            }
+
+
+            if ($configLink) {
+                $user->increment('trial_accounts_taken');
+
+                $message = "✅ اکانت تست شما با موفقیت ساخته شد!\n\n";
+                $message .= "📦 حجم: *{$volumeMB} مگابایت*\n";
+                $message .= "⏳ اعتبار: *{$durationHours} ساعت*\n\n";
+                $message .= "🔗 لینک اتصال:\n`{$configLink}`";
+
+                Telegram::sendMessage([
+                    'chat_id' => $chatId,
+                    'text' => $this->escape($message),
+                    'parse_mode' => 'MarkdownV2'
+                ]);
+            } else {
+                throw new \Exception('لینک کانفیگ پس از ساخت کاربر دریافت نشد.');
+            }
+
+        } catch (\Exception $e) {
+            Log::error('Trial Account Creation Failed: ' . $e->getMessage(), ['user_id' => $user->id]);
+            Telegram::sendMessage(['chat_id' => $chatId, 'text' => $this->escape('❌ متاسفانه در حال حاضر مشکلی در ساخت اکانت تست پیش آمده است. لطفاً بعداً تلاش کنید.')]);
+        }
+    }
+
     /**
      * Centralized method to send or edit messages with proper error handling.
      */

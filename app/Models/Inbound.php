@@ -10,16 +10,18 @@ class Inbound extends Model
     use HasFactory;
 
 
-    protected $fillable = [
-
-        'title',
-        'inbound_data',
-
-    ];
+    protected $fillable = ['title', 'inbound_data'];
 
     protected $casts = [
         'inbound_data' => 'array',
     ];
+
+
+    public function getPanelIdAttribute(): ?int
+    {
+
+        return $this->inbound_data['id'] ?? null;
+    }
 }
 
 

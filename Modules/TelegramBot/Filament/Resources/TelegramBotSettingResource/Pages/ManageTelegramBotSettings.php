@@ -62,10 +62,15 @@ class ManageTelegramBotSettings extends Page implements HasForms
                     Textarea::make('start_message')->label('پیام دستور /start')->rows(3),
                 ])->columnSpan('full')->hidden(fn() => $this->activeTab !== 'messages'),
 
-                Section::make('تنظیمات ربات')->schema([
-                    Textarea::make('bot_name')->label('نام ربات')->rows(1),
-                    Textarea::make('bot_token')->label('توکن ربات')->rows(1),
-                ])->columnSpan('full')->hidden(fn() => $this->activeTab !== 'settings'),
+//                Section::make('تنظیمات ربات')->schema([
+//                    Textarea::make('bot_name')->label('نام ربات')->rows(1),
+//                    Textarea::make('bot_token')->label('توکن ربات')->rows(1),
+//                ])->columnSpan('full')->hidden(fn() => $this->activeTab !== 'settings'),
+
+
+
+
+
 
                 Section::make('تنظیمات کیف پول')
                     ->schema([

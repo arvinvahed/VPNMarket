@@ -14,7 +14,7 @@
 
     <title>{{ config('app.name', 'Laravel') }} - ورود</title>
 
-  
+
     <link rel="stylesheet" href="{{ asset('themes/auth/' . $activeAuthTheme . '/css/style.css') }}">
 </head>
 <body class="{{ $activeAuthTheme }}-auth-body">

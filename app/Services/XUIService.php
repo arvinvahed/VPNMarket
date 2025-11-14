@@ -72,28 +72,46 @@ class XUIService
             $clientSettings = [ 'id' => $uuid, 'email' => $clientData['email'], 'totalGB' => $clientData['total'], 'expiryTime' => $clientData['expiryTime'], 'enable' => true, 'tgId' => '', 'subId' => $subId, 'limitIp' => 0, 'flow' => '', ];
             $settings = json_encode(['clients' => [$clientSettings]]);
 
-            $endpointsToTry = [ '/panel/api/inbounds/addClient', '/panel/inbound/addClient' ];
+            // --- مسیرهای API برای سازگاری بیشتر ---
+            $endpointsToTry = [
+                $this->basePath . "/panel/inbound/addClient/{$inboundId}", // مسیر جدیدتر
+                $this->basePath . '/panel/api/inbounds/addClient',
+                $this->basePath . '/panel/inbound/addClient'
+            ];
+            // ------------------------------------
+
             $response = null;
+            $lastResponse = null;
+
             foreach ($endpointsToTry as $endpoint) {
-                $addClientUrl = $this->baseUrl . $this->basePath . $endpoint;
+                $addClientUrl = $this->baseUrl . $endpoint;
                 $currentResponse = $this->getClient()->asForm()->post($addClientUrl, [ 'id' => $inboundId, 'settings' => $settings, ]);
                 Log::info('XUI addClient Attempt', ['url' => $addClientUrl, 'status' => $currentResponse->status()]);
-                if ($currentResponse->status() != 404) {
-                    $response = $currentResponse;
-                    break;
+
+                $lastResponse = $currentResponse;
+
+                if ($currentResponse->status() == 200) {
+                    $responseData = $currentResponse->json();
+                    // بررسی می‌کنیم که آیا پاسخ موفقیت‌آمیز است
+                    if ($responseData && ($responseData['success'] ?? false) === true) {
+                        $response = $currentResponse;
+                        break; // موفق بود
+                    }
                 }
             }
 
             if (!$response) {
-                return ['success' => false, 'msg' => 'Could not find a valid API endpoint to add client.'];
+                // اگر همه تلاش‌ها ناموفق بود
+                $errorMsg = 'No response received.';
+                if ($lastResponse) {
+                    $errorMsg = $lastResponse->body() ?: $lastResponse->status();
+                }
+                return ['success' => false, 'msg' => "Could not add client. X-UI responded: {$errorMsg}"];
             }
 
             $responseData = $response->json();
 
-            if (!$responseData || ($responseData['success'] ?? false) !== true) {
-                return ['success' => false, 'msg' => 'Failed to create XUI client. Response: ' . ($response->body() ?: 'Empty Response')];
-            }
-
+            // اگر به این بخش رسیدیم، یعنی $response موفقیت آمیز بوده است
             return array_merge($responseData, [ 'generated_uuid' => $uuid, 'generated_subId' => $subId ]);
 
         } catch (\Exception $e) {
@@ -117,7 +135,8 @@ class XUIService
                 'expiryTime' => $clientData['expiryTime'],
                 'enable' => true,
                 'tgId' => '',
-                'subId' => $clientData['subId'] ?? Str::random(16),
+                $subId = $clientData['subId'] ?? Str::random(16),
+                'subId' => $subId,
                 'limitIp' => 0,
                 'flow' => '',
             ];

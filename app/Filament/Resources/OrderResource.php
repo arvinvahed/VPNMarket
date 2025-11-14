@@ -196,8 +196,15 @@ class OrderResource extends Resource
 
                             if ($success) {
                                 if($isRenewal) {
-                                    $originalOrder->update(['config_details' => $finalConfig, 'expires_at' => $newExpiresAt->format('Y-m-d H:i:s')]);
+                                    $originalOrder->update([
+                                        'config_details' => $finalConfig,
+                                        'expires_at' => $newExpiresAt->format('Y-m-d H:i:s'),
+                                        'panel_username' => $uniqueUsername
+                                    ]);
+
+
                                     $user->update(['show_renewal_notification' => true]);
+
 
                                     $user->notifications()->create([
                                         'type' => 'service_renewed_admin',
@@ -206,13 +213,20 @@ class OrderResource extends Resource
                                         'link' => route('dashboard', ['tab' => 'my_services']),
                                     ]);
                                 } else {
-                                    $order->update(['config_details' => $finalConfig, 'expires_at' => $newExpiresAt]);
+
+                                    $order->update([
+                                        'config_details' => $finalConfig,
+                                        'expires_at' => $newExpiresAt,
+                                        'panel_username' => $uniqueUsername
+                                    ]);
                                     $user->notifications()->create([
                                         'type' => 'service_activated_admin',
                                         'title' => 'سرویس شما فعال شد!',
                                         'message' => "خرید سرویس {$plan->name} توسط مدیر تایید و فعال شد.",
                                         'link' => route('dashboard', ['tab' => 'my_services']),
                                     ]);
+
+
                                 }
 
                                 $order->update(['status' => 'paid']);
@@ -241,6 +255,14 @@ class OrderResource extends Resource
     }
 
     public static function getRelations(): array { return []; }
-    public static function getPages(): array { return ['index' => Pages\ListOrders::route('/'), 'create' => Pages\CreateOrder::route('/create'), 'edit' => Pages\EditOrder::route('/{record}/edit')]; }
+    public static function getPages(): array { return ['index' => Pages\ListOrders::route('/'),
+        'create' => Pages\CreateOrder::route('/create'),
+        'edit' => Pages\EditOrder::route('/{record}/edit'),
+
+
+
+    ];
+
+    }
 }
 

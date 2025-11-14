@@ -11,6 +11,7 @@ use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Tabs;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\Toggle;
 use Filament\Forms\Concerns\InteractsWithForms;
 use Filament\Forms\Contracts\HasForms;
 use Filament\Forms\Form;
@@ -74,15 +75,19 @@ class ThemeSettings extends Page implements HasForms
                                 'cyberpunk' => 'قالب سایبرپانک',
                                 'dragon' => 'قالب اژدها',
                                 'arcane' => 'قالب آرکین (جادوی تکنولوژی)',
+
                             ])->default('welcome')->live(),
                             Select::make('active_auth_theme')->label('قالب صفحات ورود/ثبت‌نام')->options([
                                 'default' => 'قالب پیش‌فرض (Breeze)',
                                 'cyberpunk' => 'قالب سایبرپانک',
                                 'dragon' => 'قالب اژدها',
+
                             ])->default('cyberpunk')->live(),
 //                            FileUpload::make('site_logo')->label('لوگوی سایت')->image()->directory('logos')->visibility('public'),
 
                         ]),
+
+
 
                     Tabs\Tab::make('محتوای قالب اژدها')->icon('heroicon-o-fire')->visible(fn(Get $get) => $get('active_theme') === 'dragon')->schema([
                         Section::make('عمومی')->schema([
@@ -206,7 +211,7 @@ class ThemeSettings extends Page implements HasForms
                             TextInput::make('marzban_host')->label('آدرس پنل مرزبان')->required(),
                             TextInput::make('marzban_sudo_username')->label('نام کاربری ادمین')->required(),
                             TextInput::make('marzban_sudo_password')->label('رمز عبور ادمین')->password()->required(),
-                            TextInput::make('marzban_node_hostname')->label('آدرس دامنه/سرور برای کانفیگ')->required(),
+                            TextInput::make('marzban_node_hostname')->label('آدرس دامنه/سرور برای کانفیگ')
                         ]),
                         Section::make('تنظیمات پنل سنایی / X-UI')
                             ->visible(fn(Get $get) => $get('panel_type') === 'xui')
@@ -218,8 +223,15 @@ class ThemeSettings extends Page implements HasForms
                                     ->required(fn(Get $get): bool => $get('panel_type') === 'xui'),
                                 TextInput::make('xui_pass')->label('رمز عبور')->password()
                                     ->required(fn(Get $get): bool => $get('panel_type') === 'xui'),
-                                Select::make('xui_default_inbound_id')->label('اینباند پیش‌فرض')->options(fn () => Inbound::all()->pluck('title', 'id'))->searchable()
-                                    ->required(fn(Get $get): bool => $get('panel_type') === 'xui'), // اعتبارسنجی شرطی
+                                Select::make('xui_default_inbound_id')
+                                    ->label('اینباند پیش‌فرض (ID پنل)')
+                                    ->options(function () {
+
+                                        return \App\Models\Inbound::all()->pluck('title', 'panel_id');
+                                    })
+                                    ->searchable()
+                                    ->required(fn(Get $get): bool => $get('panel_type') === 'xui'),
+
                                 Radio::make('xui_link_type')->label('نوع لینک تحویلی')->options(['single' => 'لینک تکی', 'subscription' => 'لینک سابسکریپشن'])->default('single')
                                     ->required(fn(Get $get): bool => $get('panel_type') === 'xui'),
                                 TextInput::make('xui_subscription_url_base')->label('آدرس پایه لینک سابسکریپشن'),
@@ -247,6 +259,24 @@ class ThemeSettings extends Page implements HasForms
                             TextInput::make('telegram_bot_token')->label('توکن ربات تلگرام')->password(),
                             TextInput::make('telegram_admin_chat_id')->label('چت آی‌دی ادمین')->numeric(),
                         ]),
+
+                        Section::make('اجبار به عضویت در کانال')
+                            ->description('کاربران باید قبل از استفاده از ربات، در کانال عضو شوند.')
+                            ->schema([
+                                Toggle::make('force_join_enabled')
+                                    ->label('فعالسازی اجبار به عضویت')
+                                    ->reactive()
+                                    ->default(false),
+
+                                TextInput::make('telegram_required_channel_id')
+                                    ->label('آی‌دی کانال (Username یا Chat ID)')
+                                    ->placeholder('@mychannel یا -100123456789')
+                                    ->hint('اگر کانال عمومی است @username و اگر خصوصی است Chat ID (مثل -100123456789) را وارد کنید.')
+
+                                    ->required(fn (Get $get): bool => $get('force_join_enabled') === true)
+                                    ->maxLength(100),
+                            ]),
+
                     ]),
 
                     Tabs\Tab::make('سیستم دعوت از دوستان')

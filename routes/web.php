@@ -19,14 +19,29 @@ use Modules\TelegramBot\Http\Controllers\WebhookController as TelegramWebhookCon
 
 Route::get('/', function () {
     $settings = Setting::all()->pluck('value', 'key');
-    $plans = Plan::where('is_active', true)->orderBy('price')->get();
+//    $plans = Plan::where('is_active', true)->orderBy('price')->get();
+    $plans = Plan::where('is_active', true)
+        ->orderByRaw("
+            CASE duration_days
+                WHEN 30  THEN 1
+                WHEN 60  THEN 2
+                WHEN 90  THEN 3
+                WHEN 365 THEN 4
+                ELSE 5
+            END
+        ")
+        ->get();
+
     $activeTheme = $settings->get('active_theme', 'welcome');
 
     if (!view()->exists("themes.{$activeTheme}")) {
         abort(404, "قالب '{$activeTheme}' یافت نشد.");
     }
 
-    return view("themes.{$activeTheme}", ['settings' => $settings, 'plans' => $plans]);
+    return view("themes.{$activeTheme}", [
+        'settings' => $settings,
+        'plans'    => $plans
+    ]);
 })->name('home');
 
 

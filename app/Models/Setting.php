@@ -17,10 +17,19 @@ class Setting extends Model
     protected $fillable = [
         'key',
         'value',
+        'test_account_enabled',
+        'test_account_volume_gb',
+        'test_account_days',
+        'test_account_max_per_user',
     ];
 
     public function inbounds()
     {
         return $this->hasMany(\App\Models\Inbound::class);
+    }
+
+    public function getTestAccountEnabledAttribute($value)
+    {
+        return (bool) $value;
     }
 }

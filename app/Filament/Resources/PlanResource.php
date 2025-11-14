@@ -36,9 +36,9 @@ class PlanResource extends Resource
                     ->label('قیمت')
                     ->numeric()
                     ->required(),
-                Forms\Components\TextInput::make('currency')
-                    ->label('واحد پول')
-                    ->default('تومان/ماهانه'),
+//                Forms\Components\TextInput::make('currency')
+//                    ->label('واحد پول')
+//                    ->default('تومان/ماهانه'),
                 Forms\Components\Textarea::make('features')
                     ->label('ویژگی‌ها')
                     ->required()
@@ -57,7 +57,8 @@ class PlanResource extends Resource
                     ->numeric()
                     ->required()
                     ->default(30)
-                    ->helperText('مدت زمان اعتبار سرویس را به روز وارد کنید.'),
+                    ->helperText('مثال: 30 = ۱ ماهه، 90 = ۳ ماهه، 365 = ۱ ساله')
+                    ->rules(['min:1']),
                 //========================================================
 
                 Forms\Components\Toggle::make('is_popular')
@@ -76,10 +77,29 @@ class PlanResource extends Resource
         return $table
             ->columns([
                 Tables\Columns\TextColumn::make('name')->label('نام پلن'),
-                Tables\Columns\TextColumn::make('price')->label('قیمت'),
+                Tables\Columns\TextColumn::make('price')
+                    ->label('قیمت کل')
+                    ->formatStateUsing(fn ($record) =>
+                        number_format($record->price) . ' تومان' .
+                        ($record->duration_days > 30 ? ' (' . number_format($record->monthly_price) . ' تومان/ماه)' : '')
+                    ),
                 Tables\Columns\BooleanColumn::make('is_popular')->label('محبوب'),
                 Tables\Columns\BooleanColumn::make('is_active')->label('فعال'),
+                Tables\Columns\TextColumn::make('duration_days')
+                    ->label('مدت زمان')
+                    ->formatStateUsing(fn ($state, $record) => $record->duration_label)
+                    ->sortable(),
+
+                Tables\Columns\TextColumn::make('monthly_price')
+                    ->label('قیمت ماهانه')
+                    ->formatStateUsing(fn ($record) => number_format($record->monthly_price) . ' تومان')
+                    ->sortable(),
+
+
+
             ])
+
+
             ->filters([
                 //
             ])
