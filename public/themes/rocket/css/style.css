@@ -1,0 +1,267 @@
+/* ===========================
+🔥  - NeoGlass Edition
+Version: 2.0
+Author: Arvin
+=========================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;600;800&display=swap');
+
+:root {
+    --fire: #ff3c00;
+    --white: #f7f8fa;
+    --gray: #cfd4e0;
+    --dark-bg: #0b0b12;
+    --glass-bg: rgba(255, 255, 255, 0.05);
+    --border: rgba(255, 255, 255, 0.1);
+}
+
+body {
+    font-family: 'Vazirmatn', sans-serif;
+    background: var(--dark-bg);
+    color: var(--white);
+    overflow-x: hidden;
+    scroll-behavior: smooth;
+}
+
+section {
+    position: relative;
+    z-index: 2;
+}
+
+/* ==== Navbar ==== */
+.navbar {
+    background: rgba(10, 10, 15, 0.6);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    padding: 0.8rem 0;
+    transition: all 0.3s ease;
+}
+
+.navbar-brand {
+    font-weight: 800;
+    font-size: 1.5rem;
+    color: var(--fire) !important;
+    letter-spacing: 1px;
+}
+
+.navbar-nav .nav-link {
+    color: var(--gray);
+    margin: 0 10px;
+    transition: color 0.3s;
+}
+.navbar-nav .nav-link:hover {
+    color: var(--fire);
+}
+
+/* ==== Hero Section ==== */
+.hero {
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    background: radial-gradient(circle at 50% 30%, rgba(255, 60, 0, 0.15), transparent 70%);
+}
+
+.hero h1 {
+    font-size: 4rem;
+    font-weight: 800;
+    color: var(--white);
+    margin-bottom: 20px;
+    letter-spacing: -1px;
+}
+
+.hero p {
+    font-size: 1.1rem;
+    color: var(--gray);
+    max-width: 650px;
+    margin: 0 auto 30px;
+}
+
+.btn-fire {
+    background: var(--fire);
+    color: white;
+    font-weight: 700;
+    padding: 12px 35px;
+    border: none;
+    border-radius: 8px;
+    box-shadow: 0 5px 20px rgba(255, 60, 0, 0.4);
+    transition: all 0.3s ease;
+}
+.btn-fire:hover {
+    background: #ff5722;
+    transform: translateY(-3px);
+}
+
+/* ==== Features ==== */
+.section-title {
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--white);
+    text-align: center;
+    margin-bottom: 3rem;
+}
+
+.feature-card {
+    background: var(--glass-bg);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 30px;
+    text-align: center;
+    transition: all 0.3s;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+}
+.feature-card:hover {
+    border-color: var(--fire);
+    transform: translateY(-5px);
+    box-shadow: 0 15px 35px rgba(255, 60, 0, 0.15);
+}
+.feature-card i {
+    font-size: 2.5rem;
+    color: var(--fire);
+    margin-bottom: 15px;
+}
+
+/* ==== Pricing ==== */
+.pricing-card {
+    background: var(--glass-bg);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 40px 25px;
+    text-align: center;
+    transition: all 0.3s;
+}
+.pricing-card:hover {
+    border-color: var(--fire);
+    box-shadow: 0 10px 35px rgba(255, 60, 0, 0.2);
+}
+.pricing-card.popular {
+    border: 2px solid var(--fire);
+}
+.pricing-card h4 {
+    font-weight: 700;
+    margin-bottom: 10px;
+}
+.pricing-card .price {
+    font-size: 2.5rem;
+    font-weight: 800;
+    color: var(--fire);
+}
+.pricing-card ul {
+    list-style: none;
+    padding: 0;
+    margin: 25px 0;
+    color: var(--gray);
+}
+.pricing-card li {
+    margin-bottom: 10px;
+}
+
+/* ==== FAQ ==== */
+.accordion-item {
+    background: var(--glass-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    margin-bottom: 10px;
+}
+.accordion-button {
+    background: transparent;
+    color: var(--white);
+    font-weight: 600;
+}
+.accordion-button:not(.collapsed) {
+    color: var(--fire);
+    background: rgba(255, 60, 0, 0.05);
+    box-shadow: none;
+}
+
+/* ==== Footer ==== */
+.footer {
+    background: rgba(10, 10, 20, 0.9);
+    border-top: 1px solid var(--border);
+    padding: 25px 0;
+    text-align: center;
+    color: var(--gray);
+    font-size: 0.9rem;
+}
+.footer span {
+    color: var(--fire);
+}
+
+/* ==== Social Links ==== */
+.social-links {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 20px;
+}
+
+.social-link {
+    font-size: 1.6rem;
+    color: var(--gray);
+    transition: all 0.3s ease;
+}
+
+.social-link.telegram:hover {
+    color: #0088cc;
+    text-shadow: 0 0 10px #0088cc;
+    transform: translateY(-3px);
+}
+
+.social-link.instagram:hover {
+    color: #e1306c;
+    text-shadow: 0 0 10px #e1306c;
+    transform: translateY(-3px);
+}
+
+
+/* ==== Plan Filters / Toggle Buttons ==== */
+.plan-filters {
+    display: flex;
+    justify-content: center;
+    margin: 30px 0;
+    gap: 15px;
+}
+
+.filter-btn {
+    background: var(--glass-bg);
+    border: 1px solid var(--border);
+    color: var(--gray);
+    padding: 10px 25px;
+    border-radius: 30px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: all 0.3s ease;
+    backdrop-filter: blur(10px);
+}
+
+.filter-btn:hover {
+    color: var(--fire);
+    border-color: var(--fire);
+    box-shadow: 0 0 15px rgba(255, 60, 0, 0.3);
+}
+
+.filter-btn.active {
+    background: var(--fire);
+    color: var(--white);
+    border-color: var(--fire);
+    box-shadow: 0 0 20px rgba(255, 60, 0, 0.5);
+}
+
+/* راست‌چین کردن متن داخل کارت پلن */
+.pricing-card {
+    direction: rtl;
+    text-align: right;
+}
+
+/* راست‌چین کردن لیست ویژگی‌ها */
+.pricing-card ul {
+    padding-right: 0; /* حذف فاصله پیش‌فرض */
+}
+
+/* آیکون‌ها سمت راست باشن */
+.pricing-card ul li i {
+    margin-left: 0.5rem;
+    margin-right: 0;
+}
+

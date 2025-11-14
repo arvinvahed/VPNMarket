@@ -72,15 +72,17 @@ class ThemeSettings extends Page implements HasForms
                             // --- تغییر کلیدی ۲: حذف ->required() از این فیلدها ---
                             Select::make('active_theme')->label('قالب اصلی سایت')->options([
                                 'welcome' => 'قالب خوش‌آمدگویی',
-                                'cyberpunk' => 'قالب سایبرپانک',
-                                'dragon' => 'قالب اژدها',
-                                'arcane' => 'قالب آرکین (جادوی تکنولوژی)',
+//                                'cyberpunk' => 'قالب سایبرپانک',
+//                                'dragon' => 'قالب اژدها',
+//                                'arcane' => 'قالب آرکین (جادوی تکنولوژی)',
+                                'rocket' => 'قالب RoketVPN (موشکی)',
 
                             ])->default('welcome')->live(),
                             Select::make('active_auth_theme')->label('قالب صفحات ورود/ثبت‌نام')->options([
                                 'default' => 'قالب پیش‌فرض (Breeze)',
                                 'cyberpunk' => 'قالب سایبرپانک',
-                                'dragon' => 'قالب اژدها',
+//                                'dragon' => 'قالب اژدها',
+                                'rocket' => 'قالب RoketVPN (موشکی)',
 
                             ])->default('cyberpunk')->live(),
 //                            FileUpload::make('site_logo')->label('لوگوی سایت')->image()->directory('logos')->visibility('public'),
@@ -88,6 +90,39 @@ class ThemeSettings extends Page implements HasForms
                         ]),
 
 
+                    Tabs\Tab::make('محتوای قالب RoketVPN (موشکی)')
+                        ->icon('heroicon-o-rocket-launch')
+                        ->visible(fn(Get $get) => $get('active_theme') === 'rocket') // توجه: کلید 'rocket'
+                        ->schema([
+                            Section::make('عمومی')->schema([
+                                TextInput::make('rocket_navbar_brand')->label('نام برند در Navbar')->placeholder('Roket VPN'),
+                                TextInput::make('rocket_footer_text')->label('متن فوتر')->placeholder('© 2025 Roket VPN. پرتاب به آزادی.'),
+                            ])->columns(2),
+                            Section::make('بخش اصلی (Hero Section)')->schema([
+                                TextInput::make('rocket_hero_title')->label('تیتر اصلی')->placeholder('پرتاب به آزادی اینترنت'),
+                                Textarea::make('rocket_hero_subtitle')->label('زیرتیتر')->rows(2)->placeholder('با Roket VPN، مرزهای دیجیتال را بشکنید و با سرعت نور، به هر محتوایی دسترسی پیدا کنید.'),
+                                TextInput::make('rocket_hero_button_text')->label('متن دکمه اصلی')->placeholder('شلیک به آسمان'),
+                            ]),
+                            Section::make('بخش ویژگی‌ها (Features)')->schema([
+                                TextInput::make('rocket_features_title')->label('عنوان بخش')->placeholder('موتورهای قدرتمند ما'),
+                                TextInput::make('rocket_feature1_title')->label('عنوان ویژگی ۱')->placeholder('سرعت مافوق صوت'),
+                                Textarea::make('rocket_feature1_desc')->label('توضیح ویژگی ۱')->rows(2),
+                                TextInput::make('rocket_feature2_title')->label('عنوان ویژگی ۲')->placeholder('امنیت فضایی'),
+                                Textarea::make('rocket_feature2_desc')->label('توضیح ویژگی ۲')->rows(2),
+                                TextInput::make('rocket_feature3_title')->label('عنوان ویژگی ۳')->placeholder('عبور از هر مانع'),
+                                Textarea::make('rocket_feature3_desc')->label('توضیح ویژگی ۳')->rows(2),
+                            ])->columns(3),
+                            Section::make('بخش قیمت‌گذاری (Pricing)')->schema([
+                                TextInput::make('rocket_pricing_title')->label('عنوان بخش')->placeholder('مدار خود را انتخاب کنید'),
+                            ]),
+                            Section::make('بخش سوالات متداول (FAQ)')->schema([
+                                TextInput::make('rocket_faq_title')->label('عنوان بخش')->placeholder('پرواز بدون پرسش؟'),
+                                TextInput::make('rocket_faq1_q')->label('سوال اول')->placeholder('آیا Roket VPN داده‌های من را ردیابی می‌کند؟'),
+                                Textarea::make('rocket_faq1_a')->label('پاسخ اول')->rows(2),
+                                TextInput::make('rocket_faq2_q')->label('سوال دوم')->placeholder('چگونه می‌توانم طرح خود را ارتقا دهم؟'),
+                                Textarea::make('rocket_faq2_a')->label('پاسخ دوم')->rows(2),
+                            ]),
+                        ]),
 
                     Tabs\Tab::make('محتوای قالب اژدها')->icon('heroicon-o-fire')->visible(fn(Get $get) => $get('active_theme') === 'dragon')->schema([
                         Section::make('عمومی')->schema([
