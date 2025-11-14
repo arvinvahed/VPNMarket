@@ -153,9 +153,10 @@ sudo ln -sf /etc/nginx/sites-available/vpnmarket /etc/nginx/sites-enabled/
 sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t && sudo systemctl restart nginx
 
-# === Supervisor ===
+# === Supervisor (اصلاح شده) ===
 sudo tee /etc/supervisor/conf.d/vpnmarket-worker.conf >/dev/null <<EOF
 [program:vpnmarket-worker]
+process_name=%(program_name)s_%(process_num)02d
 command=php $PROJECT_PATH/artisan queue:work redis --sleep=3 --tries=3
 autostart=true
 autorestart=true
@@ -167,7 +168,7 @@ EOF
 
 sudo supervisorctl reread
 sudo supervisorctl update
-sudo supervisorctl start vpnmarket-worker:*
+sudo supervisorctl start all
 
 # === Cache ===
 sudo -u www-data php artisan config:cache
