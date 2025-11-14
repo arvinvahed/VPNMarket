@@ -104,14 +104,25 @@ sudo sed -i "s|APP_ENV=.*|APP_ENV=production|" .env
 sudo sed -i "s|QUEUE_CONNECTION=.*|QUEUE_CONNECTION=redis|" .env
 
 # === نصب وابستگی‌ها ===
-echo -e "${YELLOW}🧰 نصب پکیج‌ها ...${NC}"
+echo -e "${YELLOW}🧰 نصب پکیج‌های Composer ...${NC}"
 sudo -u www-data composer install --no-dev --optimize-autoloader
 
-# پاکسازی و نصب npm به صورت امن
+# --- شروع بخش اصلاح شده برای NPM ---
+echo -e "${YELLOW}📦 نصب پکیج‌های Node.js ...${NC}"
+# پاکسازی فایل‌های قدیمی
 sudo -u www-data rm -rf node_modules package-lock.json
 sudo -u www-data npm cache clean --force
-sudo -u www-data npm install --legacy-peer-deps
+
+# ایجاد پوشه کش npm و تعیین مالکیت آن برای www-data
+NPM_CACHE_DIR="/var/www/.npm"
+sudo mkdir -p $NPM_CACHE_DIR
+sudo chown -R www-data:www-data $NPM_CACHE_DIR
+sudo chown -R www-data:www-data $PROJECT_PATH
+
+# اجرای دستورات npm با کاربر www-data و مشخص کردن مسیر کش
+sudo -u www-data npm install --cache $NPM_CACHE_DIR --legacy-peer-deps
 sudo -u www-data npm run build
+# --- پایان بخش اصلاح شده ---
 
 sudo -u www-data php artisan key:generate
 sudo -u www-data php artisan migrate --seed --force
