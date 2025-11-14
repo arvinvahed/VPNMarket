@@ -38,26 +38,46 @@ class ThemeSettings extends Page implements HasForms
 
 
 
+//    public function mount(): void
+//    {
+//
+//        $settings = Setting::all()->pluck('value', 'key')->toArray();
+//
+//
+//        $defaultData = [
+//            'panel_type' => 'marzban',
+//            'xui_host' => null,
+//            'xui_user' => null,
+//            'xui_pass' => null,
+//            'xui_default_inbound_id' => null,
+//            'xui_link_type' => 'single',
+//        ];
+
     public function mount(): void
     {
-
+        // تمام تنظیمات ذخیره شده را از دیتابیس بخوان
         $settings = Setting::all()->pluck('value', 'key')->toArray();
 
 
-        $defaultData = [
+        $this->form->fill(array_merge([
             'panel_type' => 'marzban',
-            'xui_host' => null,
-            'xui_user' => null,
-            'xui_pass' => null,
+            'xui_host' => '',
+            'xui_user' => '',
+            'xui_pass' => '',
             'xui_default_inbound_id' => null,
             'xui_link_type' => 'single',
-        ];
-
-
-        $this->data = array_merge($defaultData, $settings);
-
-
+            'marzban_host' => '',
+            'marzban_sudo_username' => '',
+            'marzban_sudo_password' => '',
+        ], $settings));
     }
+
+
+//
+//        $this->data = array_merge($defaultData, $settings);
+//
+//
+//    }
     public function form(Form $form): Form
     {
         return $form->schema([
@@ -259,13 +279,15 @@ class ThemeSettings extends Page implements HasForms
                                 TextInput::make('xui_pass')->label('رمز عبور')->password()
                                     ->required(fn(Get $get): bool => $get('panel_type') === 'xui'),
                                 Select::make('xui_default_inbound_id')
-                                    ->label('اینباند پیش‌فرض (ID پنل)')
+                                    ->label('اینباند پیش‌فرض')
                                     ->options(function () {
-
-                                        return \App\Models\Inbound::all()->pluck('title', 'panel_id');
+                                        // این کد آرایه‌ای با فرمت [id => "title (ID: panel_id)"] می‌سازد
+                                        return Inbound::all()->mapWithKeys(function ($inbound) {
+                                            return [$inbound->id => "{$inbound->title} (ID: {$inbound->panel_id})"];
+                                        });
                                     })
                                     ->searchable()
-                                    ->required(fn(Get $get): bool => $get('panel_type') === 'xui'),
+                                    ->requiredIf('panel_type', 'xui'),
 
                                 Radio::make('xui_link_type')->label('نوع لینک تحویلی')->options(['single' => 'لینک تکی', 'subscription' => 'لینک سابسکریپشن'])->default('single')
                                     ->required(fn(Get $get): bool => $get('panel_type') === 'xui'),
