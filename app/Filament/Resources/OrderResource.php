@@ -6,10 +6,14 @@ use App\Events\OrderPaid;
 use App\Filament\Resources\OrderResource\Pages;
 use App\Models\Inbound;
 use App\Models\Order;
+use Illuminate\Support\Str;
+
 use App\Models\Setting;
 use App\Models\Transaction;
 use App\Models\Notification as UserNotification;
 use App\Services\MarzbanService;
+use SimpleSoftwareIO\QrCode\Facades\QrCode;
+
 use App\Services\XUIService;
 use Filament\Forms;
 use Filament\Forms\Form;
@@ -152,7 +156,10 @@ class OrderResource extends Resource
                                     return;
                                 }
 
-                                $inboundData = json_decode($inbound->inbound_data, true);
+
+                                $inboundData = is_string($inbound->inbound_data)
+                                    ? json_decode($inbound->inbound_data, true)
+                                    : $inbound->inbound_data;
                                 $clientData = ['email' => $uniqueUsername, 'total' => $plan->volume_gb * 1073741824, 'expiryTime' => $newExpiresAt->timestamp * 1000];
                                 $response = $xuiService->addClient($inboundData['id'], $clientData);
 
@@ -250,6 +257,15 @@ class OrderResource extends Resource
                         });
                     }),
                 Tables\Actions\DeleteAction::make(),
+
+
+
+
+
+
+
+                Tables\Actions\DeleteAction::make(),
+
             ])
             ->bulkActions([Tables\Actions\BulkActionGroup::make([Tables\Actions\DeleteBulkAction::make()])]);
     }

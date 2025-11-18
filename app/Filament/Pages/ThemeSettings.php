@@ -115,22 +115,71 @@ class ThemeSettings extends Page implements HasForms
                             // --- تغییر کلیدی ۲: حذف ->required() از این فیلدها ---
                             Select::make('active_theme')->label('قالب اصلی سایت')->options([
                                 'welcome' => 'قالب خوش‌آمدگویی',
-//                                'cyberpunk' => 'قالب سایبرپانک',
-//                                'dragon' => 'قالب اژدها',
-//                                'arcane' => 'قالب آرکین (جادوی تکنولوژی)',
+
                                 'rocket' => 'قالب RoketVPN (موشکی)',
+
 
                             ])->default('welcome')->live(),
                             Select::make('active_auth_theme')->label('قالب صفحات ورود/ثبت‌نام')->options([
                                 'default' => 'قالب پیش‌فرض (Breeze)',
                                 'cyberpunk' => 'قالب سایبرپانک',
-//                                'dragon' => 'قالب اژدها',
                                 'rocket' => 'قالب RoketVPN (موشکی)',
+
+
 
                             ])->default('cyberpunk')->live(),
 //                            FileUpload::make('site_logo')->label('لوگوی سایت')->image()->directory('logos')->visibility('public'),
 
                         ]),
+
+
+
+
+
+                    Tabs\Tab::make('محتوای قالب Nebula (سحابی)')
+                        ->icon('heroicon-o-sparkles')
+                        ->visible(fn(Get $get) => $get('active_theme') === 'nebula')
+                        ->schema([
+                            Section::make('عمومی')->schema([
+                                TextInput::make('nebula_navbar_brand')->label('نام برند در Navbar')->placeholder('NebulaVPN'),
+                                TextInput::make('nebula_footer_text')->label('متن فوتر')->placeholder('© 2025 Nebula Networks - سفر به لبه کهکشان دیجیتال'),
+                            ])->columns(2),
+
+                            Section::make('بخش اصلی (Hero Section)')->schema([
+                                TextInput::make('nebula_hero_title')->label('تیتر اصلی')->placeholder('سفری به سمت بی‌نهایت'),
+                                Textarea::make('nebula_hero_subtitle')->label('زیرتیتر')->rows(2)->placeholder('در اعماق فضای دیجیتال، سرعت و امنیت تو را به کهکشانی از آزادی می‌رساند.'),
+                                TextInput::make('nebula_hero_button_text')->label('متن دکمه اصلی')->placeholder('شروع مأموریت'),
+                            ]),
+
+                            Section::make('بخش ویژگی‌ها (Features)')->schema([
+                                TextInput::make('nebula_features_title')->label('عنوان بخش')->placeholder('فناوری‌های کهکشانی ما'),
+                                TextInput::make('nebula_feature1_title')->label('عنوان ویژگی ۱')->placeholder('سرعت فضاپیمایی'),
+                                Textarea::make('nebula_feature1_desc')->label('توضیح ویژگی ۱')->rows(2)->placeholder('پروتکل‌های کوانتومی برای سرعت بی‌نهایت.'),
+                                TextInput::make('nebula_feature2_title')->label('عنوان ویژگی ۲')->placeholder('سپر نئونی'),
+                                Textarea::make('nebula_feature2_desc')->label('توضیح ویژگی ۲')->rows(2)->placeholder('رمزگذاری پیشرفته که داده‌هایتان را در برابر تهدیدات محافظت می‌کند.'),
+                                TextInput::make('nebula_feature3_title')->label('عنوان ویژگی ۳')->placeholder('پرتاب از گذرگاه'),
+                                Textarea::make('nebula_feature3_desc')->label('توضیح ویژگی ۳')->rows(2)->placeholder('عبور از فیلترها و محدودیت‌ها مانند عبور از یک کرم‌چاله.'),
+                            ])->columns(3),
+
+                            Section::make('بخش قیمت‌گذاری (Pricing)')->schema([
+                                TextInput::make('nebula_pricing_title')->label('عنوان بخش')->placeholder('انتخاب مأموریت خود'),
+                            ]),
+
+                            Section::make('بخش سوالات متداول (FAQ)')->schema([
+                                TextInput::make('nebula_faq_title')->label('عنوان بخش')->placeholder('راهنمای فضانوردان'),
+                                TextInput::make('nebula_faq1_q')->label('سوال اول')->placeholder('آیا NebulaVPN داده‌های من را ردیابی می‌کند؟'),
+                                Textarea::make('nebula_faq1_a')->label('پاسخ اول')->rows(2)->placeholder('خیر. ما از سیاست No-Log پیروی می‌کنیم.'),
+                                TextInput::make('nebula_faq2_q')->label('سوال دوم')->placeholder('چند دستگاه می‌توانم متصل کنم؟'),
+                                Textarea::make('nebula_faq2_a')->label('پاسخ دوم')->rows(2)->placeholder('بسته به پلن، تا ۶ دستگاه هم‌زمان.'),
+                            ]),
+
+                            Section::make('لینک‌های اجتماعی')->schema([
+                                TextInput::make('telegram_link')->label('لینک تلگرام (کامل)')->placeholder('https://t.me/NebulaVPN'),
+                                TextInput::make('instagram_link')->label('لینک اینستاگرام (کامل)')->placeholder('https://instagram.com/NebulaVPN'),
+                            ])->columns(2),
+                        ]),
+
+
 
                     Tabs\Tab::make('محتوای قالب RoketVPN (موشکی)')
                         ->icon('heroicon-o-rocket-launch')
@@ -299,13 +348,16 @@ class ThemeSettings extends Page implements HasForms
                                 Select::make('xui_default_inbound_id')
                                     ->label('اینباند پیش‌فرض')
                                     ->options(function () {
-                                        // این کد آرایه‌ای با فرمت [id => "title (ID: panel_id)"] می‌سازد
-                                        return Inbound::all()->mapWithKeys(function ($inbound) {
-                                            return [$inbound->id => "{$inbound->title} (ID: {$inbound->panel_id})"];
-                                        });
+                                        return \App\Models\Inbound::all()
+                                            ->filter(fn($inbound) => $inbound->is_active) // از accessor استفاده میشه
+                                            ->mapWithKeys(fn($inbound) => [
+                                                $inbound->panel_id => $inbound->dropdown_label // اینجا accessorها کار می‌کنن
+                                            ]);
                                     })
                                     ->searchable()
-                                    ->requiredIf('panel_type', 'xui'),
+                                    ->requiredIf('panel_type', 'xui')
+                                    ->helperText('اگر لیست خالی است، ابتدا از بخش "اینباندها" Sync را بزنید.'),
+
 
                                 Radio::make('xui_link_type')->label('نوع لینک تحویلی')->options(['single' => 'لینک تکی', 'subscription' => 'لینک سابسکریپشن'])->default('single')
                                     ->required(fn(Get $get): bool => $get('panel_type') === 'xui'),

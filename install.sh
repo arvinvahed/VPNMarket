@@ -66,6 +66,15 @@ sudo apt-get install -y \
     php${PHP_VERSION}-intl php${PHP_VERSION}-gd php${PHP_VERSION}-dom \
     php${PHP_VERSION}-redis
 
+
+
+echo -e "${YELLOW}🔧 تنظیم محدودیت آپلود در PHP ...${NC}"
+PHP_INI_PATH="/etc/php/${PHP_VERSION}/fpm/php.ini"
+sudo sed -i 's/upload_max_filesize = .*/upload_max_filesize = 10M/' $PHP_INI_PATH
+sudo sed -i 's/post_max_size = .*/post_max_size = 12M/' $PHP_INI_PATH
+echo "محدودیت آپلود PHP به 10 مگابایت افزایش یافت."
+
+
 # Composer با PHP 8.3
 sudo apt-get remove -y composer || true
 php${PHP_VERSION} -r "copy('https://getcomposer.org/installer', 'composer-setup.php');"
@@ -122,13 +131,15 @@ sudo chown -R www-data:www-data $PROJECT_PATH
 # اجرای دستورات npm با کاربر www-data و مشخص کردن مسیر کش
 sudo -u www-data npm install --cache $NPM_CACHE_DIR --legacy-peer-deps
 sudo -u www-data npm run build
-# --- پایان بخش اصلاح شده ---
+
 
 sudo -u www-data php artisan key:generate
 sudo -u www-data php artisan migrate --seed --force
 sudo -u www-data php artisan storage:link
 
 # === پیکربندی Nginx ===
+
+echo -e "${YELLOW}🌐 پیکربندی Nginx با محدودیت آپلود ...${NC}"
 PHP_FPM_SOCK_PATH="/run/php/php${PHP_VERSION}-fpm.sock"
 
 sudo tee /etc/nginx/sites-available/vpnmarket >/dev/null <<EOF
@@ -136,6 +147,9 @@ server {
     listen 80;
     server_name $DOMAIN;
     root $PROJECT_PATH/public;
+
+    # --- خط جدید برای افزایش محدودیت آپلود در Nginx ---
+    client_max_body_size 10M;
 
     index index.php;
     location / {
@@ -152,6 +166,7 @@ EOF
 sudo ln -sf /etc/nginx/sites-available/vpnmarket /etc/nginx/sites-enabled/
 sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t && sudo systemctl restart nginx
+echo "محدودیت آپلود Nginx به 10 مگابایت افزایش یافت."
 
 # === Supervisor (اصلاح شده) ===
 sudo tee /etc/supervisor/conf.d/vpnmarket-worker.conf >/dev/null <<EOF

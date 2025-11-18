@@ -16,6 +16,8 @@ use Filament\Tables\Table;
 use Filament\Tables\Actions\Action;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
+use App\Models\Transaction;
+use Illuminate\Support\Facades\DB;
 
 class UserResource extends Resource
 {
@@ -70,6 +72,10 @@ class UserResource extends Resource
                 Tables\Actions\EditAction::make(),
                 Tables\Actions\DeleteAction::make(),
 
+
+
+
+
                 // اکشن ارسال پیام به تلگرام
                 Action::make('send_telegram_message')
                     ->label('پیام تلگرام')
@@ -98,6 +104,98 @@ class UserResource extends Resource
                             Notification::make()->title('خطا در ارسال')->body('ارسال پیام به تلگرام ناموفق بود. (چک کردن لاگ‌ها)')->danger()->send();
                         }
                     }),
+
+
+
+                Tables\Actions\Action::make('adjust_wallet')
+                    ->label('تنظیم کیف پول')
+                    ->icon('heroicon-o-currency-dollar')
+                    ->color('warning')
+                    ->modalHeading(fn (User $record) => "تنظیم کیف پول: {$record->name}")
+                    ->modalDescription('موجودی کیف پول کاربر را افزایش یا کاهش دهید')
+                    ->modalSubmitActionLabel('اعمال تغییر')
+                    ->modalWidth('lg')
+                    ->form([
+                        Forms\Components\Placeholder::make('current_balance')
+                            ->label('موجودی فعلی')
+                            ->content(fn (User $record) => '💰 ' . number_format($record->balance ?? 0) . ' تومان')
+                            ->columnSpanFull(),
+
+                        Forms\Components\Grid::make(2)
+                            ->schema([
+                                Forms\Components\TextInput::make('amount')
+                                    ->label('مبلغ تغییر')
+                                    ->numeric()
+                                    ->required()
+                                    ->prefix('﷼')
+                                    ->suffix('تومان')
+                                    ->helperText('مثال: +100000 یا -50000')
+                                    ->hint('عدد منفی برای کاهش')
+                                    ->rules(['required', 'numeric', 'not_in:0'])
+                                    ->live(onBlur: true),
+
+                                Forms\Components\Placeholder::make('new_balance_preview')
+                                    ->label('موجودی جدید')
+                                    ->content(function (callable $get, User $record) {
+                                        $amount = (int) $get('amount');
+                                        if ($amount === 0 || empty($get('amount'))) return '—';
+                                        $newBalance = ($record->balance ?? 0) + $amount;
+                                        $emoji = $amount > 0 ? '⬆️' : '⬇️';
+                                        return "{$emoji} " . number_format($newBalance) . ' تومان';
+                                    }),
+                            ]),
+
+                        Forms\Components\Textarea::make('description')
+                            ->label('دلیل تغییر')
+                            ->required()
+                            ->rows(3)
+                            ->maxLength(500)
+                            ->helperText('این توضیحات در تراکنش ثبت و به اطلاع کاربر می‌رسد')
+                            ->placeholder('مثال: هدیه ویژه، جبران خسارت، یا تغییر دستی...'),
+                    ])
+                    ->action(function (User $record, array $data) {
+                        $amount = (int) $data['amount'];
+                        $description = $data['description'];
+
+                        DB::transaction(function () use ($record, $amount, $description) {
+                            $oldBalance = $record->balance;
+                            $record->increment('balance', $amount);
+
+                            Transaction::create([
+                                'user_id' => $record->id,
+                                'order_id' => null,
+                                'amount' => $amount,
+                                'type' => $amount > 0 ? 'deposit' : 'withdraw',
+                                'status' => 'completed',
+                                'description' => "تنظیم دستی توسط ادمین: {$description}",
+                                'payment_method' => 'manual_admin',
+                            ]);
+
+                            if ($record->telegram_chat_id) {
+                                $webhookController = new WebhookController();
+                                $action = $amount >= 0 ? 'افزوده شد' : 'کسر شد';
+                                $emoji = $amount > 0 ? '✅' : '⚠️';
+
+                                $message = "{$emoji} *تغییر موجودی کیف پول*\n\n";
+                                $message .= "▫️ مبلغ: *" . number_format(abs($amount)) . "* تومان {$action}\n";
+                                $message .= "▫️ موجودی جدید: *" . number_format($record->balance) . "* تومان\n\n";
+                                $message .= "💬 توضیحات: _{$description}_\n\n";
+                                $message .= "👤 توسط: *مدیریت*";
+
+                                $webhookController->sendSingleMessageToUser($record->telegram_chat_id, $message);
+                            }
+                        });
+
+                        Notification::make()
+                            ->title('موفقیت')
+                            ->body("کیف پول کاربر {$record->name} با موفقیت به‌روزرسانی شد ✅")
+                            ->success()
+                            ->send();
+                    })
+                    ->requiresConfirmation()
+                    ->modalIcon('heroicon-o-exclamation-triangle')
+                    ->modalIconColor('warning')
+                    ->modalSubmitActionLabel('بله، اعمال شود'),
 
 
             ])

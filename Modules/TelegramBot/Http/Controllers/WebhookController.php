@@ -5,6 +5,7 @@ namespace Modules\TelegramBot\Http\Controllers;
 use App\Models\Order;
 use App\Models\Plan;
 use App\Models\Setting;
+use App\Models\TelegramBotSetting;
 use App\Services\XUIService;
 use App\Models\User;
 use App\Services\MarzbanService;
@@ -45,7 +46,7 @@ class WebhookController extends Controller
 
             \Telegram\Bot\Laravel\Facades\Telegram::setAccessToken($botToken);
 
-            // --- Fancy Message Template ---
+
             $title = "📢 *اعلان ویژه از سوی تیم مدیریت*";
             $divider = str_repeat('━', 20);
             $footer = "💠 *با تشکر از همراهی شما* 💠";
@@ -53,7 +54,6 @@ class WebhookController extends Controller
             // Escape user message for MarkdownV2 safety
             $formattedMessage = $this->escape($message);
 
-            // Combine all parts
             $fullMessage = "{$title}\n\n{$divider}\n\n📝 *{$formattedMessage}*\n\n{$divider}\n\n{$footer}";
 
             // --- Send Message ---
@@ -75,7 +75,7 @@ class WebhookController extends Controller
     public function sendSingleMessageToUser(string $chatId, string $message): bool
     {
         try {
-            // مطمئن شوید که تنظیمات و توکن ربات لود شده باشند
+
             if (!$this->settings) {
                 $this->settings = \App\Models\Setting::all()->pluck('value', 'key');
             }
@@ -150,7 +150,7 @@ class WebhookController extends Controller
         $text = trim($message->getText() ?? '');
         $user = User::where('telegram_chat_id', $chatId)->first();
 
-        // --- کاربر جدید ---
+
         if (!$user) {
             $userFirstName = $message->getFrom()->getFirstName() ?? 'کاربر';
             $password = Str::random(10);
@@ -208,19 +208,12 @@ class WebhookController extends Controller
             return;
         }
 
-        // <<<---### اصلاحیه ۱: چک کردن عضویت برای *تمام* پیام‌های متنی ###--->>>
-        //
-        //  این بلاک، عضویت را برای کاربرانی که از قبل در ربات بوده‌اند
-        //  و دکمه‌های منوی اصلی (پیام متنی) را می‌زنند، چک می‌کند.
-        //
+
         if (!$this->isUserMemberOfChannel($user)) {
             $this->showChannelRequiredMessage($chatId);
-            return; // اجرای ادامه تابع متوقف می‌شود
+            return;
         }
-        // <<<---### پایان اصلاحیه ۱ ###--->>>
 
-
-        // --- بخش مدیریت دکمه‌های منو ---
         if ($user->bot_state) {
             if ($user->bot_state === 'awaiting_deposit_amount') {
                 $this->processDepositAmount($user, $text);
@@ -282,6 +275,20 @@ class WebhookController extends Controller
         $data = $callbackQuery->getData();
         $user = User::where('telegram_chat_id', $chatId)->first();
 
+
+
+        if (Str::startsWith($data, 'show_duration_')) {
+            $durationDays = (int)Str::after($data, 'show_duration_');
+            $this->sendPlansByDuration($chatId, $durationDays, $messageId);
+            return; // ← مهم!
+        }
+
+        if (Str::startsWith($data, 'show_service_')) {
+            $orderId = Str::after($data, 'show_service_');
+            $this->showServiceDetails($user, $orderId, $messageId);
+            return;
+        }
+
         // چک عضویت
         // این بخش به درستی کار می‌کند، چون تابع isUserMemberOfChannel اصلاح شده
         if (!$user || !$this->isUserMemberOfChannel($user)) {
@@ -298,8 +305,7 @@ class WebhookController extends Controller
             Telegram::answerCallbackQuery(['callback_query_id' => $callbackQuery->getId()]);
         } catch (\Exception $e) { Log::warning('Could not answer callback query: ' . $e->getMessage()); }
 
-        // این چک تکراری بود و حذف شد
-        // if (!$user || !$this->isUserMemberOfChannel($user)) { ... }
+
 
         if (!$user) {
             Telegram::sendMessage(['chat_id' => $chatId, 'text' => $this->escape("❌ کاربر یافت نشد. لطفاً با دستور /start ربات را مجدداً راه‌اندازی کنید."), 'parse_mode' => 'MarkdownV2']);
@@ -320,8 +326,19 @@ class WebhookController extends Controller
         } elseif (Str::startsWith($data, 'pay_card_')) {
             $orderId = Str::after($data, 'pay_card_');
             $this->sendCardPaymentInfo($chatId, $orderId, $messageId);
+        }// --- QR Code Generation ---
+        elseif (Str::startsWith($data, 'qrcode_order_')) {
+            $orderId = Str::after($data, 'qrcode_order_');
+
+            try {
+                Telegram::answerCallbackQuery(['callback_query_id' => $callbackQuery->getId()]);
+            } catch (\Exception $e) {
+                Log::warning('Could not answer callback query for QR Code: ' . $e->getMessage());
+            }
+
+            $this->sendQRCodeForOrder($user, $orderId);
         }
-        // --- Renewal Flow ---
+
         elseif (Str::startsWith($data, 'renew_order_')) {
             $originalOrderId = Str::after($data, 'renew_order_');
             $this->startRenewalPurchaseProcess($user, $originalOrderId, $messageId);
@@ -499,49 +516,234 @@ class WebhookController extends Controller
         }
     }
 
-    //======================================================================
-    // 2. Main Menu & Navigation Methods
-    //======================================================================
 
     protected function sendPlans($chatId, $messageId = null)
     {
-        // مرحله ۱: دریافت پلن‌ها با ترتیب صحیح (اول زمان، بعد حجم)
-        $plans = Plan::where('is_active', true)
-            ->orderBy('duration_days', 'asc')
-            ->orderBy('volume_gb', 'asc')
-            ->get();
+        try {
 
-        if ($plans->isEmpty()) {
-            $keyboard = Keyboard::make()->inline()->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت', 'callback_data' => '/start'])]);
-            $this->sendOrEditMessage($chatId, "⚠️ هیچ پلن فعالی در دسترس نیست.", $keyboard, $messageId);
+            $activePlans = Plan::where('is_active', true)
+                ->orderBy('duration_days', 'asc')
+                ->get();
+
+            if ($activePlans->isEmpty()) {
+                $keyboard = Keyboard::make()->inline()
+                    ->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت', 'callback_data' => '/start'])]);
+                $this->sendOrEditMessage($chatId, "⚠️ هیچ پلن فعالی در دسترس نیست.", $keyboard, $messageId);
+                return;
+            }
+
+            // استخراج duration_days منحصربه‌فرد و مرتب
+            $durations = $activePlans->pluck('duration_days')->unique()->sort();
+
+            $message = "🚀 *انتخاب سرویس VPN*\n\n";
+            $message .= "لطفاً مدت‌زمان سرویس مورد نظر را انتخاب کنید:\n\n";
+            $message .= "👇 یکی از گزینه‌های زیر را بزنید:";
+
+            $keyboard = Keyboard::make()->inline();
+
+            foreach ($durations as $durationDays) {
+                // تولید برچسب فارسی برای هر مدت‌زمان
+                $buttonText = $this->generateDurationLabel($durationDays);
+
+                $keyboard->row([
+                    Keyboard::inlineButton([
+                        'text' => $buttonText,
+                        'callback_data' => "show_duration_{$durationDays}"
+                    ])
+                ]);
+            }
+
+            $keyboard->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت به منوی اصلی', 'callback_data' => '/start'])]);
+
+            $this->sendOrEditMessage($chatId, $message, $keyboard, $messageId);
+
+        } catch (\Exception $e) {
+            Log::error('Error in sendPlans: ' . $e->getMessage(), [
+                'chat_id' => $chatId,
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            $keyboard = Keyboard::make()->inline()
+                ->row([Keyboard::inlineButton(['text' => '🏠 بازگشت به منوی اصلی', 'callback_data' => '/start'])]);
+
+            $this->sendOrEditMessage($chatId, "❌ خطایی در بارگذاری پلن‌ها رخ داد.", $keyboard, $messageId);
+        }
+    }
+
+
+    protected function generateDurationLabel(int $days): string
+    {
+        // اگر مضرب 30 روز (یک ماه) باشد
+        if ($days % 30 === 0) {
+            $months = $days / 30;
+
+            return match ($months) {
+                1 => '🔸 یک ماهه',
+                2 => '🔸 دو ماهه',
+                3 => '🔸 سه ماهه',
+                6 => '🔸 شش ماهه',
+                12 => '🔸 یک ساله',
+                default => "{$months} ماهه",
+            };
+        }
+
+
+        return "{$days} روزه";
+    }
+    protected function sendPlansByDuration($chatId, $durationDays, $messageId = null)
+    {
+        try {
+            $plans = Plan::where('is_active', true)
+                ->where('duration_days', $durationDays)
+                ->orderBy('volume_gb', 'asc')
+                ->get();
+
+            if ($plans->isEmpty()) {
+                $keyboard = Keyboard::make()->inline()
+                    ->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت', 'callback_data' => '/plans'])]);
+                $this->sendOrEditMessage($chatId, "⚠️ پلنی با این مدت‌زمان یافت نشد.", $keyboard, $messageId);
+                return;
+            }
+
+            $durationLabel = $plans->first()->duration_label;
+            $message = "📅 *پلن‌های {$durationLabel}*\n\n";
+
+
+            foreach ($plans as $index => $plan) {
+                if ($index > 0) {
+                    $message .= "〰️〰️〰️\n\n";
+                }
+                $message .= ($index + 1) . ". 💎 *" . $this->escape($plan->name) . "*\n";
+                $message .= "   📦 " . $this->escape($plan->volume_gb . ' گیگ') . "\n";
+                $message .= "   💳 " . $this->escape(number_format($plan->price) . ' تومان') . "\n";
+            }
+
+            $message .= "\n👇 پلن مورد نظر را انتخاب کنید:";
+
+            $keyboard = Keyboard::make()->inline();
+
+            // دکمه‌ها: نام پلن + قیمت
+            foreach ($plans as $plan) {
+                // ✅ اینجا نام پلن و قیمت رو ترکیب میکنیم
+                $buttonText = $this->escape($plan->name) . ' | ' . number_format($plan->price) . ' تومان';
+
+                $keyboard->row([
+                    Keyboard::inlineButton([
+                        'text' => $buttonText,
+                        'callback_data' => "buy_plan_{$plan->id}"
+                    ])
+                ]);
+            }
+
+            $keyboard->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت به انتخاب زمان', 'callback_data' => '/plans'])]);
+
+            $this->sendOrEditMessage($chatId, $message, $keyboard, $messageId);
+
+        } catch (\Exception $e) {
+            Log::error('Error in sendPlansByDuration: ' . $e->getMessage(), [
+                'duration_days' => $durationDays,
+                'chat_id' => $chatId,
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            $keyboard = Keyboard::make()->inline()
+                ->row([Keyboard::inlineButton(['text' => '🏠 بازگشت به منوی اصلی', 'callback_data' => '/start'])]);
+
+            $this->sendOrEditMessage($chatId, "❌ خطایی در بارگذاری پلن‌ها رخ داد.", $keyboard, $messageId);
+        }
+    }
+
+    protected function sendQRCodeForOrder($user, $orderId)
+    {
+        $order = $user->orders()->find($orderId);
+        if (!$order) {
+            Telegram::sendMessage([
+                'chat_id' => $user->telegram_chat_id,
+                'text' => $this->escape("❌ سرویس یافت نشد."),
+                'parse_mode' => 'MarkdownV2'
+            ]);
             return;
         }
 
+        if (empty($order->config_details)) {
+            Telegram::sendMessage([
+                'chat_id' => $user->telegram_chat_id,
+                'text' => $this->escape("❌ لینک کانفیگ هنوز آماده نشده است."),
+                'parse_mode' => 'MarkdownV2'
+            ]);
+            return;
+        }
 
-        $message = "🚀 *انتخاب سرویس VPN*\n\n";
-        $message .= "با خیال راحت، سرویس مورد نیاز خود را از بین پلن‌های زیر انتخاب کنید:\n\n";
+        try {
+
+            $configLink = trim($order->config_details);
+
+            // استفاده از API qrserver.com
+            $qrUrl = "https://api.qrserver.com/v1/create-qr-code/?" . http_build_query([
+                    'size' => '400x400',
+                    'data' => $configLink,
+                    'ecc' => 'H',
+                    'margin' => 10,
+                    'color' => '000000',
+                    'bgcolor' => 'FFFFFF',
+                    'format' => 'png'
+                ]);
+
+            // دانلود QR Code با cURL
+            $ch = curl_init($qrUrl);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+            $qrData = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+
+            if ($qrData === false || $httpCode !== 200) {
+                throw new \Exception('دریافت QR Code ناموفق بود. کد: ' . $httpCode);
+            }
 
 
-        $message .= "⚡️ سرعت بالا، امنیت بی‌نظیر و دسترسی جهانی با پلن‌های ما.\n";
+            $tempFile = tempnam(sys_get_temp_dir(), 'qr_') . '.png';
+            file_put_contents($tempFile, $qrData);
 
-        $message .= "🎯 پلن‌ها به ترتیب زمان و حجم مرتب شده‌اند تا انتخاب آسان‌تر باشد.\n\n";
-        $message .= "👇 لطفاً پلن مورد نظر خود را برای خرید انتخاب کنید:\n\n";
-        $keyboard = Keyboard::make()->inline();
 
-        foreach ($plans as $plan) {
-            // مرحله ۲: ساخت متن دکمه با تمام اطلاعات صحیح (نام، حجم، زمان و قیمت)
-            $planText = $this->escape("💎 {$plan->name}  |  📦 {$plan->volume_gb} گیگ  |  ⏳ {$plan->duration_label}  |  💳 " . number_format($plan->price) . " تومان");
-            $keyboard->row([
-                Keyboard::inlineButton(['text' => $planText, 'callback_data' => "buy_plan_{$plan->id}"]),
+            $keyboard = Keyboard::make()->inline()
+                ->row([
+                    Keyboard::inlineButton(['text' => "🔄 تمدید سرویس", 'callback_data' => "renew_order_{$order->id}"]),
+                    Keyboard::inlineButton(['text' => '⬅️ بازگشت به جزئیات', 'callback_data' => "show_service_{$order->id}"])
+                ])
+                ->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت به لیست سرویس‌ها', 'callback_data' => '/my_services'])]);
+
+            // ارسال فایل
+            Telegram::sendPhoto([
+                'chat_id' => $user->telegram_chat_id,
+                'photo' => InputFile::create($tempFile),
+                'caption' => $this->escape("📱 QR Code برای سرویس #{$order->id}\n\nلینک: `{$configLink}`"),
+                'parse_mode' => 'MarkdownV2',
+                'reply_markup' => $keyboard
+            ]);
+
+            // پاک کردن فایل موقت
+            unlink($tempFile);
+
+        } catch (\Exception $e) {
+            Log::error('QR Code Generation FAILED', [
+                'order_id' => $orderId,
+                'user_id' => $user->id,
+                'error_message' => $e->getMessage(),
+                'config' => $order->config_details ?? 'N/A'
+            ]);
+
+            Telegram::sendMessage([
+                'chat_id' => $user->telegram_chat_id,
+                'text' => $this->escape("❌ خطا در تولید QR Code: " . $e->getMessage()),
+                'parse_mode' => 'MarkdownV2'
             ]);
         }
-        $keyboard->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت به منوی اصلی', 'callback_data' => '/start'])]);
-        $this->sendOrEditMessage($chatId, $message, $keyboard, $messageId);
     }
-
     protected function sendMyServices($user, $messageId = null)
     {
-        // سرویس‌هایی که در 30 روز اخیر منقضی شده‌اند یا هنوز فعال هستند را نمایش بده
         $orders = $user->orders()->with('plan')
             ->where('status', 'paid')
             ->whereNotNull('plan_id')
@@ -559,73 +761,107 @@ class WebhookController extends Controller
             return;
         }
 
-        $message = "🛠 *سرویس‌های شما*\n\n";
+        $message = "🛠 *سرویس‌های شما*\n\nلطفاً یک سرویس را برای مشاهده جزئیات انتخاب کنید:";
+
         $keyboard = Keyboard::make()->inline();
 
-        foreach ($orders as $index => $order) {
+
+        foreach ($orders as $order) {
             if (!$order->plan) {
                 continue;
             }
 
             $expiresAt = Carbon::parse($order->expires_at);
             $now = now();
+            $statusIcon = '🟢';
 
-            $statusIcon = '⚫️'; // منقضی شده
-            $remainingText = "*منقضی شده*";
-            $canRenew = true;
-
-            if ($expiresAt->isFuture()) {
-                $daysRemaining = (int) floor($now->diffInDays($expiresAt));
-                $statusIcon = '🟢'; // فعال
-                $remainingText = "*" . $this->escape($daysRemaining . ' روز') . "* باقی‌مانده";
-
-                if ($daysRemaining <= 7) {
-                    $statusIcon = '🟡'; // در آستانه انقضا
-                    $remainingText = "*" . $this->escape($daysRemaining . ' روز') . "* باقی‌مانده \\(تمدید کنید\\)";
-                }
+            // تعیین آیکون وضعیت
+            if ($expiresAt->isPast()) {
+                $statusIcon = '⚫️';
+            } elseif ($expiresAt->diffInDays($now) <= 7) {
+                $statusIcon = '🟡';
             }
 
-            if ($index > 0) {
-                $message .= "〰️〰️〰️〰️〰️〰️〰️〰️〰️\n\n";
-            }
+            $buttonText = "{$statusIcon} {$order->plan->name} (ID: #{$order->id})";
 
-            // --- بخش کامل و اصلاح شده ---
-            $message .= "{$statusIcon} *سرویس:* " . $this->escape($order->plan->name) . "\n";
-
-            // نمایش نام کاربری اگر وجود داشته باشد
-            if ($order->panel_username) {
-                $message .= "👤 *نام کاربری:* `" . $this->escape($order->panel_username) . "`\n";
-            }
-
-            $message .= "🗓 *انقضا:* " . $this->escape($expiresAt->format('Y/m/d')) . " \\- " . $remainingText . "\n";
-            // *** استفاده از نام فیلد صحیح برای حجم ***
-            $message .= "📦 *حجم:* " . $this->escape($order->plan->volume_gb . ' گیگابایت') . "\n\n";
-
-
-            if (!empty($order->config_details)) {
-                $message .= "🔗 *لینک اتصال:* \n`" . $order->config_details . "`\n";
-
-            } else {
-                $message .= "⏳ در حال آماده‌سازی کانفیگ\\.\\.\\.\n";
-            }
-
-            if ($canRenew) {
-                $keyboard->row([
-                    Keyboard::inlineButton(['text' => "🔄 تمدید سرویس #{$order->id}", 'callback_data' => "renew_order_{$order->id}"])
-                ]);
-            }
+            $keyboard->row([
+                Keyboard::inlineButton([
+                    'text' => $buttonText,
+                    'callback_data' => "show_service_{$order->id}"
+                ])
+            ]);
         }
 
         $keyboard->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت به منوی اصلی', 'callback_data' => '/start'])]);
 
-        $this->sendRawMarkdownMessageWithPreview($user->telegram_chat_id, $message, $keyboard, $messageId, true);
+        $this->sendOrEditMessage($user->telegram_chat_id, $message, $keyboard, $messageId);
+    }
+
+
+    protected function showServiceDetails($user, $orderId, $messageId = null)
+    {
+        $order = $user->orders()->with('plan')->find($orderId);
+
+        if (!$order || !$order->plan || $order->status !== 'paid') {
+            $this->sendOrEditMainMenu($user->telegram_chat_id, "❌ سرویس مورد نظر یافت نشد یا معتبر نیست.", $messageId);
+            return;
+        }
+
+        $expiresAt = Carbon::parse($order->expires_at);
+        $now = now();
+        $statusIcon = '🟢';
+        $remainingText = "*" . $this->escape($expiresAt->diffInDays($now) . ' روز') . "* باقی‌مانده";
+
+        if ($expiresAt->isPast()) {
+            $statusIcon = '⚫️';
+            $remainingText = "*منقضی شده*";
+        } elseif ($expiresAt->diffInDays($now) <= 7) {
+            $statusIcon = '🟡';
+            $remainingText = "*" . $this->escape($expiresAt->diffInDays($now) . ' روز') . "* باقی‌مانده (تمدید کنید)";
+        }
+
+        // ساخت پیام با اطلاعات کامل
+        $message = "🔍 *جزئیات سرویس #{$order->id}*\n\n";
+        $message .= "{$statusIcon} *سرویس:* " . $this->escape($order->plan->name) . "\n";
+        if ($order->panel_username) {
+            $message .= "👤 *نام کاربری:* `" . $this->escape($order->panel_username) . "`\n";
+        }
+        $message .= "🗓 *انقضا:* " . $this->escape($expiresAt->format('Y/m/d')) . " - " . $remainingText . "\n";
+        $message .= "📦 *حجم:* " . $this->escape($order->plan->volume_gb . ' گیگابایت') . "\n";
+
+        if (!empty($order->config_details)) {
+            $message .= "\n🔗 *لینک اتصال:*\n`" . $order->config_details . "`\n";
+        } else {
+            $message .= "\n⏳ *در حال آماده‌سازی کانفیگ...*";
+        }
+
+        $keyboard = Keyboard::make()->inline();
+
+
+        if (!empty($order->config_details)) {
+            $keyboard->row([
+                Keyboard::inlineButton(['text' => "📱 دریافت QR Code", 'callback_data' => "qrcode_order_{$order->id}"])
+            ]);
+        }
+
+
+        $keyboard->row([
+            Keyboard::inlineButton(['text' => "🔄 تمدید سرویس", 'callback_data' => "renew_order_{$order->id}"])
+        ]);
+
+
+        $keyboard->row([
+            Keyboard::inlineButton(['text' => '⬅️ بازگشت به لیست سرویس‌ها', 'callback_data' => '/my_services'])
+        ]);
+
+        $this->sendOrEditMessage($user->telegram_chat_id, $message, $keyboard, $messageId);
     }
 
     protected function sendRawMarkdownMessageWithPreview($chatId, $text, $keyboard, $messageId = null, $disablePreview = false)
     {
         $payload = [
             'chat_id'      => $chatId,
-            'text'         => $text, // متن خام و فرمت‌بندی شده
+            'text'         => $text,
             'parse_mode'   => 'MarkdownV2',
             'reply_markup' => $keyboard,
             'disable_web_page_preview' => $disablePreview,
@@ -633,25 +869,27 @@ class WebhookController extends Controller
 
         try {
             if ($messageId) {
-                $payload['message_id'] = $messageId;
-                Telegram::editMessageText($payload);
-            } else {
-                Telegram::sendMessage($payload);
+                try {
+
+                    $payload['message_id'] = $messageId;
+                    Telegram::editMessageText($payload);
+                    return; // موفقیت‌آمیز بود
+                } catch (\Exception $e) {
+
+                    Log::warning("Edit message failed (ID: {$messageId}), sending new message: " . $e->getMessage());
+                    unset($payload['message_id']);
+                    Telegram::sendMessage($payload);
+                    return;
+                }
             }
+            Telegram::sendMessage($payload);
         } catch (\Exception $e) {
             Log::error("Error in sendRawMarkdownMessageWithPreview: " . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
-            // Fallback logic
-            if ($messageId && \Illuminate\Support\Str::contains($e->getMessage(), 'message to edit not found')) {
-                unset($payload['message_id']);
-                try { Telegram::sendMessage($payload); } catch (\Exception $e2) { Log::error("Fallback sendRawWithPreview failed: " . $e2->getMessage()); }
-            }
         }
     }
-
     protected function sendOrEditMessageWithPreviewOption($chatId, $text, $keyboard, $messageId = null, $disablePreview = false)
     {
-        // First, escape the text for MarkdownV2 as usual.
-        // The main sendOrEditMessage expects escaped text.
+
         $escapedText = $this->escape($text);
 
         // Let's create a new payload here to add the 'disable_web_page_preview' option
@@ -666,7 +904,7 @@ class WebhookController extends Controller
         try {
             if ($messageId) {
                 $payload['message_id'] = $messageId;
-                // The logic from sendOrEditMessage can be simplified and put here directly for this specific case
+
                 Telegram::editMessageText($payload);
             } else {
                 Telegram::sendMessage($payload);
@@ -738,7 +976,7 @@ class WebhookController extends Controller
         } else {
             foreach ($transactions as $transaction) {
 
-                // --- بخش تعیین نوع تراکنش ---
+
                 $type = 'نامشخص';
                 switch ($transaction->type) {
                     case 'deposit':
@@ -915,8 +1153,12 @@ class WebhookController extends Controller
 
             $order->refresh();
 
-            $successMessage = "✅ خرید شما با موفقیت انجام شد.\n\n";
-            $successMessage .= "لینک کانفیگ:\n`" . $order->config_details . "`";
+
+
+            $link = $order->config_details;
+            $successMessage = "✅ خرید شما با موفقیت انجام شد.\n\nلینک کانفیگ:\n{$link}";
+
+
             $this->sendOrEditMessage($user->telegram_chat_id, $successMessage, Keyboard::make()->inline()->row([Keyboard::inlineButton(['text' => '🛠 سرویس‌های من', 'callback_data' => '/my_services']), Keyboard::inlineButton(['text' => '🏠 منوی اصلی', 'callback_data' => '/start'])]), $messageId);
 
         } catch (\Exception $e) {
@@ -959,34 +1201,45 @@ class WebhookController extends Controller
                     return null;
                 }
             } elseif ($settings->get('panel_type') === 'xui') {
-                 $inboundPanelId = (int) $settings->get('xui_default_inbound_id');
+                $inboundPanelId = (int) $settings->get('xui_default_inbound_id');
+                Log::info('XUI: Searching for inbound', ['panel_id' => $inboundPanelId]);
 
-                 $inboundModel = \App\Models\Inbound::whereJsonContains('inbound_data->id', $inboundPanelId)->first();
+                $inboundModel = null;
+                $inboundModel = \App\Models\Inbound::whereRaw('JSON_EXTRACT(inbound_data, "$.id") = ?', [$inboundPanelId])->first();
 
-                if (!$inboundPanelId || !$inboundModel) {
-                    Log::error("XUI Inbound Model not found or ID not set. Panel ID: {$inboundPanelId}");
+                if (!$inboundModel) {
+                    $allInbounds = \App\Models\Inbound::all();
+                    foreach ($allInbounds as $inbound) {
+                        $data = json_decode($inbound->inbound_data, true);
+                        if (isset($data['id']) && $data['id'] == $inboundPanelId) {
+                            $inboundModel = $inbound;
+                            Log::info('XUI: Inbound found manually', ['inbound_id' => $inboundModel->id]);
+                            break;
+                        }
+                    }
+                }
+
+                if (!$inboundModel) {
+                    Log::error("XUI Inbound not found for Panel ID: {$inboundPanelId}");
                     return null;
                 }
 
                 $xui = new \App\Services\XUIService($settings->get('xui_host'), $settings->get('xui_user'), $settings->get('xui_pass'));
                 $clientData = [
                     'email' => $uniqueUsername,
-                    'total' => $plan->data_limit_gb * 1024 * 1024 * 1024,
+                    'total' => $plan->volume_gb * 1024 * 1024 * 1024,
                     'expiryTime' => $order->expires_at->timestamp * 1000,
                 ];
 
-                // --- 3. ارسال ID واقعی پنل به سرویس XUI ---
                 $response = $xui->addClient($inboundPanelId, $clientData);
 
                 if ($response && isset($response['success']) && $response['success']) {
-                    // چون در مدل Inbound، inbound_data به آرایه Cast شده است:
                     $inboundData = $inboundModel->inbound_data;
-
                     $linkType = $settings->get('xui_link_type', 'single');
+                    $configLink = null;
 
                     if ($linkType === 'subscription') {
                         $subId = $response['generated_subId'] ?? $uniqueUsername;
-
                         $subBaseUrl = rtrim($settings->get('xui_subscription_url_base'), '/');
                         if ($subBaseUrl && $subId !== $uniqueUsername) {
                             $configLink = $subBaseUrl . '/sub/' . $subId;
@@ -998,43 +1251,39 @@ class WebhookController extends Controller
                             ]);
                             return null;
                         }
-
                     } else {
-                        // ساخت لینک تکی
                         $clientSettings = json_decode($response['obj']['settings'] ?? '{}', true);
-                        $uuid = $clientSettings['clients'][0]['id'] ?? $response['obj']['id'] ?? null;
-
+                        $uuid = $response['generated_uuid'] ?? $response['obj']['id'] ?? null;
                         if ($uuid){
                             $streamSettings = $inboundData['streamSettings'] ?? [];
                             $serverAddress = $settings->get('server_address_for_link', parse_url($settings->get('xui_host'), PHP_URL_HOST));
                             $port = $inboundData['port'] ?? 443;
                             $remark = $plan->name;
                             $params = [];
-
-                            // بر اساس JSON شما: network=tcp و security=tls و protocol=vless
                             $params['type'] = $streamSettings['network'] ?? 'tcp';
                             $params['security'] = $streamSettings['security'] ?? 'none';
-
                             if($params['type'] === 'ws' && isset($streamSettings['wsSettings'])){
                                 $params['path'] = $streamSettings['wsSettings']['path'] ?? '/';
                                 $params['host'] = $streamSettings['wsSettings']['headers']['Host'] ?? $serverAddress;
                             }
-
                             if($params['security'] === 'tls' && isset($streamSettings['tlsSettings'])){
                                 $params['sni'] = $streamSettings['tlsSettings']['serverName'] ?? $serverAddress;
                             }
-
-                            // افزودن flow (اگر VLESS باشد و در تنظیمات کلاینت موجود باشد)
                             $flow = $clientSettings['clients'][0]['flow'] ?? '';
                             if ($flow) {
                                 $params['flow'] = $flow;
                             }
-
                             $queryString = http_build_query(array_filter($params));
                             $configLink = "vless://{$uuid}@{$serverAddress}:{$port}?{$queryString}#" . urlencode($remark . " - " . $uniqueUsername);
-
-                        } else { Log::error('Could not extract UUID from XUI response.', ['response' => $response]); }
+                        } else {
+                            Log::error('Could not extract UUID from XUI response.', ['response' => $response]);
+                            return null;
+                        }
                     }
+
+                    $configData['link'] = $configLink;
+                    $configData['username'] = $uniqueUsername;
+                    Log::info('XUI: Link generated successfully', ['link' => $configLink]);
                 } else {
                     Log::error('XUI user creation failed.', ['response' => $response]);
                     return null;
@@ -1047,19 +1296,46 @@ class WebhookController extends Controller
 
         return $configData;
     }
-
     protected function showDepositOptions($user, $messageId)
     {
         $message = "💳 *شارژ کیف پول*\n\nلطفاً مبلغ مورد نظر برای شارژ را انتخاب کنید یا مبلغ دلخواه خود را وارد نمایید:";
         $keyboard = Keyboard::make()->inline();
-        $depositAmounts = [50000, 100000, 200000, 500000];
+
+        // ✅ خواندن مقادیر از دیتابیس
+        $telegramSettings = TelegramBotSetting::pluck('value', 'key');
+        $depositAmountsJson = $telegramSettings->get('deposit_amounts', '[]');
+        $depositAmountsData = json_decode($depositAmountsJson, true);
+
+        // استخراج مقادیر amount
+        $depositAmounts = [];
+        if (is_array($depositAmountsData)) {
+            foreach ($depositAmountsData as $item) {
+                if (isset($item['amount']) && is_numeric($item['amount'])) {
+                    $depositAmounts[] = (int)$item['amount'];
+                }
+            }
+        }
+
+        // اگر تنظیماتی وجود نداشت، از مقادیر پیش‌فرض استفاده شود
+        if (empty($depositAmounts)) {
+            $depositAmounts = [50000, 100000, 200000, 500000];
+        }
+
+        // مرتب‌سازی برای نمایش بهتر
+        sort($depositAmounts);
+
+        // ساخت کیبورد
         foreach (array_chunk($depositAmounts, 2) as $row) {
             $rowButtons = [];
             foreach ($row as $amount) {
-                $rowButtons[] = Keyboard::inlineButton(['text' => number_format($amount) . ' تومان', 'callback_data' => 'deposit_amount_' . $amount]);
+                $rowButtons[] = Keyboard::inlineButton([
+                    'text' => number_format($amount) . ' تومان',
+                    'callback_data' => 'deposit_amount_' . $amount
+                ]);
             }
             $keyboard->row($rowButtons);
         }
+
         $keyboard->row([Keyboard::inlineButton(['text' => '✍️ ورود مبلغ دلخواه', 'callback_data' => '/deposit_custom'])])
             ->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت به کیف پول', 'callback_data' => '/wallet'])]);
 
@@ -1284,6 +1560,7 @@ class WebhookController extends Controller
             } elseif ($settings->get('panel_type') === 'xui') {
                 $inboundId = $settings->get('xui_default_inbound_id');
                 if (!$inboundId) throw new \Exception("XUI Inbound ID not set.");
+
 
                 $xui = new XUIService($settings->get('xui_host'), $settings->get('xui_user'), $settings->get('xui_pass'));
 
@@ -1722,16 +1999,19 @@ class WebhookController extends Controller
 
             } elseif ($panelType === 'xui') {
                 $xuiService = new XUIService($settings->get('xui_host'), $settings->get('xui_user'), $settings->get('xui_pass'));
-                $inbound = Inbound::find($settings->get('xui_default_inbound_id'));
+                $inboundId = $settings->get('xui_default_inbound_id');
+                $inbound = Inbound::where('inbound_data->id', $inboundId)->first();
 
                 if (!$inbound || !$inbound->inbound_data) {
-                    throw new \Exception('اطلاعات اینباند پیش‌فرض برای X-UI یافت نشد.');
+                    throw new \Exception('اطلاعات اینباند پیش‌فرض برای X-UI یافت نشد. Inbound Panel ID: ' . $inboundId);
                 }
+
                 if (!$xuiService->login()) {
                     throw new \Exception('خطا در لاگین به پنل X-UI.');
                 }
 
-                $inboundData = json_decode($inbound->inbound_data, true);
+                $inboundData = $inbound->inbound_data;
+
                 $clientData = [
                     'email' => $uniqueUsername,
                     'total' => $dataLimitBytes,
@@ -1739,34 +2019,60 @@ class WebhookController extends Controller
                 ];
 
                 $response = $xuiService->addClient($inboundData['id'], $clientData);
+                $configLink = null; // متغیر برای ذخیره لینک نهایی
 
                 if ($response && isset($response['success']) && $response['success']) {
 
-                    $uuid = $response['generated_uuid'] ?? null;
-                    if(!$uuid) {
+                    // ✅ تعیین نوع لینک: subscription یا single
+                    $linkType = $settings->get('xui_link_type', 'single');
 
-                        $clientSettings = json_decode($response['obj']['settings'] ?? '{}', true);
-                        $uuid = $clientSettings['clients'][0]['id'] ?? null;
+                    if ($linkType === 'subscription') {
+                        // 🎯 ساخت لینک سابسکرپشن (درست مانند خرید معمولی)
+                        $subId = $response['generated_subId'] ?? $uniqueUsername;
+                        $subBaseUrl = rtrim($settings->get('xui_subscription_url_base'), '/');
+
+                        if ($subBaseUrl && $subId !== $uniqueUsername) {
+                            $configLink = $subBaseUrl . '/sub/' . $subId;
+                            Log::info('XUI: Subscription link generated for trial', ['link' => $configLink]);
+                        } else {
+                            Log::error("XUI Subscription: base URL or subId missing for trial.", [
+                                'base_url' => $subBaseUrl,
+                                'subId' => $subId,
+                                'response' => $response
+                            ]);
+                            throw new \Exception('تنظیمات لینک سابسکرپشن ناقص است.');
+                        }
+                    } else {
+                        // 🔗 ساخت لینک VLESS سینگل
+                        $uuid = $response['generated_uuid'] ?? null;
+                        if(!$uuid) {
+                            $clientSettings = json_decode($response['obj']['settings'] ?? '{}', true);
+                            $uuid = $clientSettings['clients'][0]['id'] ?? null;
+                        }
+                        if (!$uuid) throw new \Exception('UUID از پاسخ X-UI استخراج نشد.');
+
+                        $streamSettings = json_decode($inboundData['streamSettings'], true);
+                        $serverAddress = $settings->get('server_address_for_link', parse_url($settings->get('xui_host'), PHP_URL_HOST));
+                        $port = $inboundData['port'];
+                        $remark = "Trial Account";
+                        $paramsArray = [
+                            'type' => $streamSettings['network'] ?? null,
+                            'security' => $streamSettings['security'] ?? null,
+                            'path' => $streamSettings['wsSettings']['path'] ?? ($streamSettings['grpcSettings']['serviceName'] ?? null),
+                            'sni' => $streamSettings['tlsSettings']['serverName'] ?? null,
+                            'host' => $streamSettings['wsSettings']['headers']['Host'] ?? null,
+                        ];
+                        $params = http_build_query(array_filter($paramsArray));
+                        $configLink = "vless://{$uuid}@{$serverAddress}:{$port}?{$params}#" . urlencode($remark . " - " . $uniqueUsername);
+                        Log::info('XUI: Single link generated for trial', ['link' => $configLink]);
                     }
-                    if (!$uuid) throw new \Exception('UUID از پاسخ X-UI استخراج نشد.');
 
-                    $streamSettings = json_decode($inboundData['streamSettings'], true);
-                    $serverAddress = $settings->get('server_address_for_link', parse_url($settings->get('xui_host'), PHP_URL_HOST));
-                    $port = $inboundData['port'];
-                    $remark = "Trial Account";
-                    $paramsArray = [
-                        'type' => $streamSettings['network'] ?? null,
-                        'security' => $streamSettings['security'] ?? null,
-                        'path' => $streamSettings['wsSettings']['path'] ?? ($streamSettings['grpcSettings']['serviceName'] ?? null),
-                        'sni' => $streamSettings['tlsSettings']['serverName'] ?? null,
-                        'host' => $streamSettings['wsSettings']['headers']['Host'] ?? null,
-                    ];
-                    $params = http_build_query(array_filter($paramsArray));
-                    $configLink = "vless://{$uuid}@{$serverAddress}:{$port}?{$params}#" . urlencode($remark . " - " . $uniqueUsername);
                 } else {
-                    throw new \Exception($response['msg'] ?? 'خطا در ساخت کاربر در پنل سنایی');
+                    throw new \Exception($response['msg'] ?? 'خطا در ساخت کاربر در پنل X-UI');
                 }
-            } else {
+            }
+
+            else {
                 throw new \Exception('نوع پنل در تنظیمات مشخص نشده است.');
             }
 
@@ -1774,17 +2080,20 @@ class WebhookController extends Controller
             if ($configLink) {
                 $user->increment('trial_accounts_taken');
 
+
+
                 $message = "✅ اکانت تست شما با موفقیت ساخته شد!\n\n";
                 $message .= "📦 حجم: *{$volumeMB} مگابایت*\n";
                 $message .= "⏳ اعتبار: *{$durationHours} ساعت*\n\n";
-                $message .= "🔗 لینک اتصال:\n`{$configLink}`";
+                $message .= "🔗 لینک اتصال:\n{$configLink}";
 
                 Telegram::sendMessage([
                     'chat_id' => $chatId,
                     'text' => $this->escape($message),
                     'parse_mode' => 'MarkdownV2'
                 ]);
-            } else {
+            }
+            else {
                 throw new \Exception('لینک کانفیگ پس از ساخت کاربر دریافت نشد.');
             }
 
