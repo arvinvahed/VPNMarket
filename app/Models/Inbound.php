@@ -7,12 +7,16 @@ use Illuminate\Database\Eloquent\Model;
 class Inbound extends Model
 {
 
-    protected $fillable = ['inbound_data'];
+    protected $fillable = [
+        'inbound_data',
+        'title',
+    ];
+
+
     protected $casts = [
         'inbound_data' => 'array',
     ];
 
-    // اگر می‌خوای این attributeها همیشه در آرایه/JSON باشن:
     protected $appends = ['panel_id', 'is_active', 'remark', 'dropdown_label'];
 
     public function getPanelIdAttribute(): ?int
