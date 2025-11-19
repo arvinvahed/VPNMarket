@@ -355,7 +355,7 @@ class ThemeSettings extends Page implements HasForms
                                             ]);
                                     })
                                     ->searchable()
-                                    ->requiredIf('panel_type', 'xui')
+//                                    ->requiredIf('panel_type', 'xui')
                                     ->helperText('اگر لیست خالی است، ابتدا از بخش "اینباندها" Sync را بزنید.'),
 
 
