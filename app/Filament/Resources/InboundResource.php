@@ -13,6 +13,7 @@ use Filament\Tables;
 use Filament\Tables\Actions\Action;
 use Filament\Tables\Table;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 
 class InboundResource extends Resource
 {
@@ -36,9 +37,23 @@ class InboundResource extends Resource
                 Forms\Components\Textarea::make('inbound_data')
                     ->label('اطلاعات JSON اینباند')
                     ->required()
-                    ->json()
+                    ->json() // ولیدیشن برای اطمینان از صحت ساختار JSON
                     ->rows(20)
-                    ->helperText('اطلاعات کامل اینباند را از پنل سنایی کپی کنید یا از دکمه "Sync از X-UI" استفاده کنید.'),
+                    ->helperText('اطلاعات کامل اینباند را از پنل سنایی کپی کنید یا از دکمه "Sync از X-UI" استفاده کنید.')
+
+
+                    ->afterStateHydrated(function (Forms\Components\Textarea $component, $state) {
+                        if (is_array($state)) {
+                            $component->state(json_encode($state, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+                        }
+                    })
+
+                    ->dehydrateStateUsing(function ($state) {
+                        if (is_string($state)) {
+                            return json_decode($state, true);
+                        }
+                        return $state;
+                    }),
             ]);
     }
 
@@ -91,7 +106,6 @@ class InboundResource extends Resource
                 ]),
             ])
             ->headerActions([
-                // دکمه Sync از X-UI
                 Action::make('syncFromXUI')
                     ->label('Sync از X-UI')
                     ->icon('heroicon-o-arrow-path')
@@ -129,10 +143,10 @@ class InboundResource extends Resource
 
                             $inbounds = $xui->getInbounds();
 
-                            if (empty($inbounds)) {
+                            if (is_null($inbounds)) {
                                 Notification::make()
                                     ->title('خطا')
-                                    ->body('اینباندها دریافت نشدند.')
+                                    ->body('اینباندها دریافت نشدند یا خطایی در ارتباط با پنل رخ داده است.')
                                     ->warning()
                                     ->send();
                                 return;
@@ -140,8 +154,7 @@ class InboundResource extends Resource
 
                             $synced = 0;
                             foreach ($inbounds as $inbound) {
-                                // پیدا یا ایجاد اینباند بر اساس panel_id
-                                $existing = Inbound::whereJsonContains('inbound_data->id', $inbound['id'])->first();
+                                $existing = Inbound::where('inbound_data->id', $inbound['id'])->first();
 
                                 if ($existing) {
                                     $existing->update([
@@ -161,9 +174,11 @@ class InboundResource extends Resource
 
                             Notification::make()
                                 ->title('موفقیت')
-                                ->body("{$synced} اینباند با موفقیت Sync شد.")
+                                ->body("{$synced} اینباند با موفقیت Sync شد. لطفاً صفحه را رفرش کنید (F5).")
                                 ->success()
                                 ->send();
+
+                            return redirect(request()->header('Referer'));
 
                         } catch (\Exception $e) {
                             Log::error('XUI Sync failed: ' . $e->getMessage());
@@ -177,11 +192,17 @@ class InboundResource extends Resource
             ]);
     }
 
-    public static function getRelations(): array { return []; }
+    public static function getRelations(): array
+    {
+        return [];
+    }
 
-    public static function getPages(): array { return [
-        'index' => Pages\ListInbounds::route('/'),
-        'create' => Pages\CreateInbound::route('/create'),
-        'edit' => Pages\EditInbound::route('/{record}/edit'),
-    ]; }
+    public static function getPages(): array
+    {
+        return [
+            'index' => Pages\ListInbounds::route('/'),
+//          'create' => Pages\CreateInbound::route('/create'),
+            'edit' => Pages\EditInbound::route('/{record}/edit'),
+        ];
+    }
 }

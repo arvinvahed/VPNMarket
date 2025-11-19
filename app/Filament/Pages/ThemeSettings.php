@@ -19,6 +19,7 @@ use Filament\Forms\Get;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 
 class ThemeSettings extends Page implements HasForms
 {
@@ -31,76 +32,33 @@ class ThemeSettings extends Page implements HasForms
 
     public ?array $data = [];
 
-//    public function mount(): void
-//    {
-//        $this->data = Setting::all()->pluck('value', 'key')->toArray();
-//    }
-
-
-
-
-//    public function mount(): void
-//    {
-//
-//        $settings = Setting::all()->pluck('value', 'key')->toArray();
-//
-//
-//        $defaultData = [
-//            'panel_type' => 'marzban',
-//            'xui_host' => null,
-//            'xui_user' => null,
-//            'xui_pass' => null,
-//            'xui_default_inbound_id' => null,
-//            'xui_link_type' => 'single',
-//        ];
-
     public function mount(): void
     {
-        // تمام تنظیمات ذخیره شده را از دیتابیس بخوان
         $settings = Setting::all()->pluck('value', 'key')->toArray();
 
 
-        $rocketDefaultContent = [
-            'rocket_navbar_brand' => 'RoketVPN',
-            'rocket_footer_text' => '© 2025 <span>RoketVPN</span> — پرتاب به سوی آزادی اینترنت.',
-            'rocket_hero_title' => 'سرعت بی‌نهایت، امنیت بی‌مانند',
-            'rocket_hero_subtitle' => 'با RoketVPN، مرزهای دیجیتال را بشکنید و با سرعت نور، به هر محتوایی دسترسی پیدا کنید.',
-            'rocket_hero_button_text' => 'اکنون بپیوندید!',
-            'rocket_features_title' => 'موتورهای قدرتمند ما',
-            'rocket_feature1_title' => 'سرعت مافوق صوت',
-            'rocket_feature1_desc' => 'اتصال پایدار و پرسرعت برای تجربه‌ای بی‌نظیر.',
-            'rocket_feature2_title' => 'امنیت فضایی',
-            'rocket_feature2_desc' => 'رمزگذاری پیشرفته برای محافظت کامل از داده‌های شما.',
-            'rocket_feature3_title' => 'عبور از هر مانع',
-            'rocket_feature3_desc' => 'دسترسی بدون محدودیت به تمام نقاط اینترنت.',
-            'rocket_pricing_title' => 'مدار خود را انتخاب کنید',
-            'rocket_faq_title' => 'سوالات متداول',
-            'rocket_faq1_q' => 'آیا RoketVPN داده‌های من را ردیابی می‌کند؟',
-            'rocket_faq1_a' => 'خیر. RoketVPN به حریم خصوصی شما احترام می‌گذارد و هیچ اطلاعاتی از فعالیت‌های آنلاین شما را ذخیره نمی‌کند. سیاست ما: No-Log.',
-            'rocket_faq2_q' => 'روی چند دستگاه می‌توانم استفاده کنم؟',
-            'rocket_faq2_a' => 'بسته به پلن خریداری‌شده، می‌توانید تا ۵ دستگاه را هم‌زمان متصل کنید. آزادی در دستان شماست!',
-
-        ];
+        foreach ($settings as $key => $value) {
+            if ($value === '') {
+                $settings[$key] = null;
+            }
+            if ($key === 'xui_default_inbound_id' && $value !== null) {
+                $settings[$key] = (string) $value;
+            }
+        }
 
         $this->form->fill(array_merge([
             'panel_type' => 'marzban',
-            'xui_host' => '',
-            'xui_user' => '',
-            'xui_pass' => '',
+            'xui_host' => null,
+            'xui_user' => null,
+            'xui_pass' => null,
             'xui_default_inbound_id' => null,
             'xui_link_type' => 'single',
-            'marzban_host' => '',
-            'marzban_sudo_username' => '',
-            'marzban_sudo_password' => '',
+            'marzban_host' => null,
+            'marzban_sudo_username' => null,
+            'marzban_sudo_password' => null,
         ], $settings));
     }
 
-
-//
-//        $this->data = array_merge($defaultData, $settings);
-//
-//
-//    }
     public function form(Form $form): Form
     {
         return $form->schema([
@@ -108,78 +66,19 @@ class ThemeSettings extends Page implements HasForms
                 ->id('main-tabs')
                 ->persistTab()
                 ->tabs([
-
                     Tabs\Tab::make('تنظیمات قالب')
                         ->icon('heroicon-o-swatch')
                         ->schema([
-                            // --- تغییر کلیدی ۲: حذف ->required() از این فیلدها ---
                             Select::make('active_theme')->label('قالب اصلی سایت')->options([
                                 'welcome' => 'قالب خوش‌آمدگویی',
-
                                 'rocket' => 'قالب RoketVPN (موشکی)',
-
-
                             ])->default('welcome')->live(),
                             Select::make('active_auth_theme')->label('قالب صفحات ورود/ثبت‌نام')->options([
                                 'default' => 'قالب پیش‌فرض (Breeze)',
                                 'cyberpunk' => 'قالب سایبرپانک',
                                 'rocket' => 'قالب RoketVPN (موشکی)',
-
-
-
                             ])->default('cyberpunk')->live(),
-//                            FileUpload::make('site_logo')->label('لوگوی سایت')->image()->directory('logos')->visibility('public'),
-
                         ]),
-
-
-
-
-
-                    Tabs\Tab::make('محتوای قالب Nebula (سحابی)')
-                        ->icon('heroicon-o-sparkles')
-                        ->visible(fn(Get $get) => $get('active_theme') === 'nebula')
-                        ->schema([
-                            Section::make('عمومی')->schema([
-                                TextInput::make('nebula_navbar_brand')->label('نام برند در Navbar')->placeholder('NebulaVPN'),
-                                TextInput::make('nebula_footer_text')->label('متن فوتر')->placeholder('© 2025 Nebula Networks - سفر به لبه کهکشان دیجیتال'),
-                            ])->columns(2),
-
-                            Section::make('بخش اصلی (Hero Section)')->schema([
-                                TextInput::make('nebula_hero_title')->label('تیتر اصلی')->placeholder('سفری به سمت بی‌نهایت'),
-                                Textarea::make('nebula_hero_subtitle')->label('زیرتیتر')->rows(2)->placeholder('در اعماق فضای دیجیتال، سرعت و امنیت تو را به کهکشانی از آزادی می‌رساند.'),
-                                TextInput::make('nebula_hero_button_text')->label('متن دکمه اصلی')->placeholder('شروع مأموریت'),
-                            ]),
-
-                            Section::make('بخش ویژگی‌ها (Features)')->schema([
-                                TextInput::make('nebula_features_title')->label('عنوان بخش')->placeholder('فناوری‌های کهکشانی ما'),
-                                TextInput::make('nebula_feature1_title')->label('عنوان ویژگی ۱')->placeholder('سرعت فضاپیمایی'),
-                                Textarea::make('nebula_feature1_desc')->label('توضیح ویژگی ۱')->rows(2)->placeholder('پروتکل‌های کوانتومی برای سرعت بی‌نهایت.'),
-                                TextInput::make('nebula_feature2_title')->label('عنوان ویژگی ۲')->placeholder('سپر نئونی'),
-                                Textarea::make('nebula_feature2_desc')->label('توضیح ویژگی ۲')->rows(2)->placeholder('رمزگذاری پیشرفته که داده‌هایتان را در برابر تهدیدات محافظت می‌کند.'),
-                                TextInput::make('nebula_feature3_title')->label('عنوان ویژگی ۳')->placeholder('پرتاب از گذرگاه'),
-                                Textarea::make('nebula_feature3_desc')->label('توضیح ویژگی ۳')->rows(2)->placeholder('عبور از فیلترها و محدودیت‌ها مانند عبور از یک کرم‌چاله.'),
-                            ])->columns(3),
-
-                            Section::make('بخش قیمت‌گذاری (Pricing)')->schema([
-                                TextInput::make('nebula_pricing_title')->label('عنوان بخش')->placeholder('انتخاب مأموریت خود'),
-                            ]),
-
-                            Section::make('بخش سوالات متداول (FAQ)')->schema([
-                                TextInput::make('nebula_faq_title')->label('عنوان بخش')->placeholder('راهنمای فضانوردان'),
-                                TextInput::make('nebula_faq1_q')->label('سوال اول')->placeholder('آیا NebulaVPN داده‌های من را ردیابی می‌کند؟'),
-                                Textarea::make('nebula_faq1_a')->label('پاسخ اول')->rows(2)->placeholder('خیر. ما از سیاست No-Log پیروی می‌کنیم.'),
-                                TextInput::make('nebula_faq2_q')->label('سوال دوم')->placeholder('چند دستگاه می‌توانم متصل کنم؟'),
-                                Textarea::make('nebula_faq2_a')->label('پاسخ دوم')->rows(2)->placeholder('بسته به پلن، تا ۶ دستگاه هم‌زمان.'),
-                            ]),
-
-                            Section::make('لینک‌های اجتماعی')->schema([
-                                TextInput::make('telegram_link')->label('لینک تلگرام (کامل)')->placeholder('https://t.me/NebulaVPN'),
-                                TextInput::make('instagram_link')->label('لینک اینستاگرام (کامل)')->placeholder('https://instagram.com/NebulaVPN'),
-                            ])->columns(2),
-                        ]),
-
-
 
                     Tabs\Tab::make('محتوای قالب RoketVPN (موشکی)')
                         ->icon('heroicon-o-rocket-launch')
@@ -194,7 +93,6 @@ class ThemeSettings extends Page implements HasForms
                                 Textarea::make('rocket_hero_subtitle')->label('زیرتیتر')->rows(2),
                                 TextInput::make('rocket_hero_button_text')->label('متن دکمه اصلی'),
                             ]),
-
                             Section::make('بخش قیمت‌گذاری (Pricing)')->schema([
                                 TextInput::make('rocket_pricing_title')->label('عنوان بخش'),
                             ]),
@@ -210,68 +108,6 @@ class ThemeSettings extends Page implements HasForms
                                 TextInput::make('instagram_link')->label('لینک اینستاگرام (کامل)'),
                             ])->columns(2),
                         ]),
-
-                    Tabs\Tab::make('محتوای قالب اژدها')->icon('heroicon-o-fire')->visible(fn(Get $get) => $get('active_theme') === 'dragon')->schema([
-                        Section::make('عمومی')->schema([
-                            TextInput::make('dragon_navbar_brand')->label('نام برند در Navbar')->placeholder('EZHDEHA VPN'),
-                            TextInput::make('dragon_footer_text')->label('متن فوتر')->placeholder('© 2025 Ezhdeha Networks. قدرت آتشین.'),
-                        ])->columns(2),
-                        Section::make('بخش اصلی (Hero Section)')->schema([
-                            TextInput::make('dragon_hero_title')->label('تیتر اصلی')->placeholder('مرزهای دیجیتال را بسوزان'),
-                            Textarea::make('dragon_hero_subtitle')->label('زیرتیتر')->rows(2)->placeholder('سرعتی افسانه‌ای و امنیتی نفوذناپذیر. سلطه بر اینترنت.'),
-                            TextInput::make('dragon_hero_button_text')->label('متن دکمه اصلی')->placeholder('فتح شبکه'),
-                        ]),
-                        Section::make('بخش ویژگی‌ها (Features)')->schema([
-                            TextInput::make('dragon_features_title')->label('عنوان بخش')->placeholder('عناصر قدرت اژدها'),
-                            TextInput::make('dragon_feature1_title')->label('عنوان ویژگی ۱')->placeholder('نفس آتشین (سرعت)'),
-                            Textarea::make('dragon_feature1_desc')->label('توضیح ویژگی ۱')->rows(2),
-                            TextInput::make('dragon_feature2_title')->label('عنوان ویژگی ۲')->placeholder('زره فلس‌دار (امنیت)'),
-                            Textarea::make('dragon_feature2_desc')->label('توضیح ویژگی ۲')->rows(2),
-                            TextInput::make('dragon_feature3_title')->label('عنوان ویژگی ۳')->placeholder('بینایی فراتر (آزادی)'),
-                            Textarea::make('dragon_feature3_desc')->label('توضیح ویژگی ۳')->rows(2),
-                        ])->columns(3),
-                        Section::make('بخش قیمت‌گذاری (Pricing)')->schema([
-                            TextInput::make('dragon_pricing_title')->label('عنوان بخش')->placeholder('پیمان خون'),
-                        ]),
-                        Section::make('بخش سوالات متداول (FAQ)')->schema([
-                            TextInput::make('dragon_faq_title')->label('عنوان بخش')->placeholder('طومارهای باستانی'),
-                            TextInput::make('dragon_faq1_q')->label('سوال اول')->placeholder('آیا این سرویس باستانی است؟'),
-                            Textarea::make('dragon_faq1_a')->label('پاسخ اول')->rows(2),
-                            TextInput::make('dragon_faq2_q')->label('سوال دوم')->placeholder('چگونه قدرت اژدها را فعال کنم؟'),
-                            Textarea::make('dragon_faq2_a')->label('پاسخ دوم')->rows(2),
-                        ]),
-                    ]),
-
-                    Tabs\Tab::make('محتوای قالب آرکین')->icon('heroicon-o-sparkles')->visible(fn(Get $get) => $get('active_theme') === 'arcane')->schema([
-                        Section::make('عمومی')->schema([
-                            TextInput::make('arcane_navbar_brand')->label('نام برند')->placeholder('ARCANE'),
-                            TextInput::make('arcane_footer_text')->label('متن فوتر')->placeholder('© 2025 Arcane Networks'),
-                        ]),
-                        Section::make('بخش اصلی (Hero Section)')->schema([
-                            TextInput::make('arcane_hero_title')->label('تیتر اصلی')->placeholder('کدگشایی اینترنت آزاد'),
-                            Textarea::make('arcane_hero_subtitle')->label('زیرتیتر')->rows(2),
-                            TextInput::make('arcane_hero_button')->label('متن دکمه')->placeholder('دسترسی به شبکه'),
-                        ]),
-                        Section::make('بخش ویژگی‌ها (Features)')->schema([
-                            TextInput::make('arcane_features_title')->label('عنوان بخش')->placeholder('اصول جادوی دیجیتال'),
-                            TextInput::make('arcane_feature1_title')->label('عنوان ویژگی ۱')->placeholder('پروتکل‌های کوانتومی'),
-                            Textarea::make('arcane_feature1_desc')->label('توضیح ویژگی ۱')->rows(2),
-                            TextInput::make('arcane_feature2_title')->label('عنوان ویژگی ۲')->placeholder('پنهان‌سازی هویت'),
-                            Textarea::make('arcane_feature2_desc')->label('توضیح ویژگی ۲')->rows(2),
-                            TextInput::make('arcane_feature3_title')->label('عنوان ویژگی ۳')->placeholder('اتصال بی‌پایان'),
-                            Textarea::make('arcane_feature3_desc')->label('توضیح ویژگی ۳')->rows(2),
-                        ])->columns(3),
-                        Section::make('بخش قیمت‌گذاری (Pricing)')->schema([
-                            TextInput::make('arcane_pricing_title')->label('عنوان بخش')->placeholder('انتخاب دسترسی'),
-                        ]),
-                        Section::make('بخش سوالات متداول (FAQ)')->schema([
-                            TextInput::make('arcane_faq_title')->label('عنوان بخش')->placeholder('سوالات متداول'),
-                            TextInput::make('arcane_faq1_q')->label('سوال اول')->placeholder('آیا اطلاعات کاربران ذخیره می‌شود؟'),
-                            Textarea::make('arcane_faq1_a')->label('پاسخ اول')->rows(2),
-                            TextInput::make('arcane_faq2_q')->label('سوال دوم')->placeholder('چگونه می‌توانم سرویس را روی چند دستگاه استفاده کنم؟'),
-                            Textarea::make('arcane_faq2_a')->label('پاسخ دوم')->rows(2),
-                        ]),
-                    ]),
 
                     Tabs\Tab::make('محتوای قالب سایبرپانک')->icon('heroicon-o-bolt')->visible(fn(Get $get) => $get('active_theme') === 'cyberpunk')->schema([
                         Section::make('عمومی')->schema([
@@ -327,7 +163,6 @@ class ThemeSettings extends Page implements HasForms
                     ]),
 
                     Tabs\Tab::make('تنظیمات پنل V2Ray')->icon('heroicon-o-server-stack')->schema([
-
                         Radio::make('panel_type')->label('نوع پنل')->options(['marzban' => 'مرزبان', 'xui' => 'سنایی / X-UI'])->live()->required(),
                         Section::make('تنظیمات پنل مرزبان')->visible(fn (Get $get) => $get('panel_type') === 'marzban')->schema([
                             TextInput::make('marzban_host')->label('آدرس پنل مرزبان')->required(),
@@ -338,26 +173,72 @@ class ThemeSettings extends Page implements HasForms
                         Section::make('تنظیمات پنل سنایی / X-UI')
                             ->visible(fn(Get $get) => $get('panel_type') === 'xui')
                             ->schema([
-
                                 TextInput::make('xui_host')->label('آدرس کامل پنل سنایی')
                                     ->required(fn(Get $get): bool => $get('panel_type') === 'xui'),
                                 TextInput::make('xui_user')->label('نام کاربری')
                                     ->required(fn(Get $get): bool => $get('panel_type') === 'xui'),
                                 TextInput::make('xui_pass')->label('رمز عبور')->password()
                                     ->required(fn(Get $get): bool => $get('panel_type') === 'xui'),
+
+                                // 🔥 فیکس کامل:
                                 Select::make('xui_default_inbound_id')
                                     ->label('اینباند پیش‌فرض')
                                     ->options(function () {
-                                        return \App\Models\Inbound::all()
-                                            ->filter(fn($inbound) => $inbound->is_active) // از accessor استفاده میشه
-                                            ->mapWithKeys(fn($inbound) => [
-                                                $inbound->panel_id => $inbound->dropdown_label // اینجا accessorها کار می‌کنن
-                                            ]);
-                                    })
-                                    ->searchable()
-//                                    ->requiredIf('panel_type', 'xui')
-                                    ->helperText('اگر لیست خالی است، ابتدا از بخش "اینباندها" Sync را بزنید.'),
+                                        // 🔥 دیباگ: لاگ بزن ببین چی داریم
+                                        $inbounds = \App\Models\Inbound::query()
+                                            ->whereNotNull('inbound_data')
+                                            ->get();
 
+                                        \Illuminate\Support\Facades\Log::info('Inbounds for select:', [
+                                            'count' => $inbounds->count(),
+                                            'sample' => $inbounds->first()?->inbound_data
+                                        ]);
+
+                                        $options = [];
+                                        foreach ($inbounds as $inbound) {
+                                            $data = $inbound->inbound_data;
+
+                                            // فقط اینباندهای فعال و معتبر
+                                            if (!is_array($data) ||
+                                                !isset($data['id']) ||
+                                                !isset($data['enable']) ||
+                                                $data['enable'] !== true) {
+                                                continue;
+                                            }
+
+                                            $panelId = (string) $data['id'];
+                                            $label = $inbound->dropdown_label;
+
+                                            // اطمینان حاصل کن که label یه رشته ساده است
+                                            if (!is_string($label)) {
+                                                $label = strip_tags(json_encode($label));
+                                            }
+
+                                            $options[$panelId] = $label;
+                                        }
+
+                                        ksort($options);
+                                        return $options;
+                                    })
+                                    ->getOptionLabelUsing(function ($value) {
+                                        if (blank($value)) {
+                                            return 'انتخاب نشده';
+                                        }
+
+                                        $inbound = \App\Models\Inbound::all()->firstWhere(function ($i) use ($value) {
+                                            return isset($i->inbound_data['id']) &&
+                                                (string) $i->inbound_data['id'] === (string) $value;
+                                        });
+
+                                        return $inbound?->dropdown_label ?? "⚠️ اینباند نامعتبر (ID: $value)";
+                                    })
+                                    ->dehydrateStateUsing(fn ($state) => $state ? (string) $state : null)
+                                    ->native(false) // مهم: از سلکت سفارشی فیلمنت استفاده کن
+                                    ->searchable()
+                                    ->preload()
+                                    ->allowHtml()
+                                    ->placeholder('یک اینباند انتخاب کنید')
+                                    ->helperText('اگر لیست خالی است، ابتدا از بخش "اینباندها" Sync را بزنید و صفحه را رفرش کنید.'),
 
                                 Radio::make('xui_link_type')->label('نوع لینک تحویلی')->options(['single' => 'لینک تکی', 'subscription' => 'لینک سابسکریپشن'])->default('single')
                                     ->required(fn(Get $get): bool => $get('panel_type') === 'xui'),
@@ -366,7 +247,6 @@ class ThemeSettings extends Page implements HasForms
                     ]),
 
                     Tabs\Tab::make('تنظیمات پرداخت')->icon('heroicon-o-credit-card')->schema([
-
                         Section::make('پرداخت کارت به کارت')->schema([
                             TextInput::make('payment_card_number')
                                 ->label('شماره کارت')
@@ -381,12 +261,10 @@ class ThemeSettings extends Page implements HasForms
                     ]),
 
                     Tabs\Tab::make('تنظیمات ربات تلگرام')->icon('heroicon-o-paper-airplane')->schema([
-
                         Section::make('اطلاعات اتصال ربات')->schema([
                             TextInput::make('telegram_bot_token')->label('توکن ربات تلگرام')->password(),
                             TextInput::make('telegram_admin_chat_id')->label('چت آی‌دی ادمین')->numeric(),
                         ]),
-
                         Section::make('اجبار به عضویت در کانال')
                             ->description('کاربران باید قبل از استفاده از ربات، در کانال عضو شوند.')
                             ->schema([
@@ -394,16 +272,13 @@ class ThemeSettings extends Page implements HasForms
                                     ->label('فعالسازی اجبار به عضویت')
                                     ->reactive()
                                     ->default(false),
-
                                 TextInput::make('telegram_required_channel_id')
                                     ->label('آی‌دی کانال (Username یا Chat ID)')
                                     ->placeholder('@mychannel یا -100123456789')
                                     ->hint('اگر کانال عمومی است @username و اگر خصوصی است Chat ID (مثل -100123456789) را وارد کنید.')
-
                                     ->required(fn (Get $get): bool => $get('force_join_enabled') === true)
                                     ->maxLength(100),
                             ]),
-
                     ]),
 
                     Tabs\Tab::make('سیستم دعوت از دوستان')
@@ -417,7 +292,6 @@ class ThemeSettings extends Page implements HasForms
                                         ->numeric()
                                         ->default(0)
                                         ->helperText('مبلغی که بلافاصله پس از ثبت‌نام با کد معرف، به کیف پول کاربر جدید اضافه می‌شود.'),
-
                                     TextInput::make('referral_referrer_reward')
                                         ->label('پاداش معرف')
                                         ->numeric()
@@ -432,9 +306,6 @@ class ThemeSettings extends Page implements HasForms
 
     public function submit(): void
     {
-
-
-
         $this->form->validate();
         $formData = $this->form->getState();
 

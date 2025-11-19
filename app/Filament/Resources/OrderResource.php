@@ -146,7 +146,10 @@ class OrderResource extends Resource
                                     return;
                                 }
                                 $xuiService = new XUIService($settings->get('xui_host'), $settings->get('xui_user'), $settings->get('xui_pass'));
-                                $inbound = Inbound::find($settings->get('xui_default_inbound_id'));
+                                $defaultInboundId = $settings->get('xui_default_inbound_id');
+                                $inbound = Inbound::where('inbound_data->id', $defaultInboundId)->first();
+
+
                                 if (!$inbound || !$inbound->inbound_data) {
                                     Notification::make()->title('خطا')->body('اطلاعات اینباند پیش‌فرض برای X-UI یافت نشد.')->danger()->send();
                                     return;

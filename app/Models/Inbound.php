@@ -19,9 +19,9 @@ class Inbound extends Model
 
     protected $appends = ['panel_id', 'is_active', 'remark', 'dropdown_label'];
 
-    public function getPanelIdAttribute(): ?int
+    public function getPanelIdAttribute(): ?string
     {
-        return $this->inbound_data['id'] ?? null;
+        return isset($this->inbound_data['id']) ? (string) $this->inbound_data['id'] : null;
     }
 
     public function getIsActiveAttribute(): bool
