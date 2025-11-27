@@ -163,14 +163,14 @@ class ThemeSettings extends Page implements HasForms
                     ]),
 
                     Tabs\Tab::make('تنظیمات پنل V2Ray')->icon('heroicon-o-server-stack')->schema([
-                        Radio::make('panel_type')->label('نوع پنل')->options(['marzban' => 'مرزبان', 'xui' => 'سنایی / X-UI'])->live()->required(),
+                        Radio::make('panel_type')->label('نوع پنل')->options(['marzban' => 'مرزبان', 'xui' => 'تنظیمات پنل سنایی / X-UI / TX-UI'])->live()->required(),
                         Section::make('تنظیمات پنل مرزبان')->visible(fn (Get $get) => $get('panel_type') === 'marzban')->schema([
                             TextInput::make('marzban_host')->label('آدرس پنل مرزبان')->required(),
                             TextInput::make('marzban_sudo_username')->label('نام کاربری ادمین')->required(),
                             TextInput::make('marzban_sudo_password')->label('رمز عبور ادمین')->password()->required(),
                             TextInput::make('marzban_node_hostname')->label('آدرس دامنه/سرور برای کانفیگ')
                         ]),
-                        Section::make('تنظیمات پنل سنایی / X-UI')
+                        Section::make('تنظیمات پنل سنایی / X-UI / TX-UI')
                             ->visible(fn(Get $get) => $get('panel_type') === 'xui')
                             ->schema([
                                 TextInput::make('xui_host')->label('آدرس کامل پنل سنایی')
@@ -184,61 +184,42 @@ class ThemeSettings extends Page implements HasForms
                                 Select::make('xui_default_inbound_id')
                                     ->label('اینباند پیش‌فرض')
                                     ->options(function () {
-                                        // 🔥 دیباگ: لاگ بزن ببین چی داریم
-                                        $inbounds = \App\Models\Inbound::query()
-                                            ->whereNotNull('inbound_data')
-                                            ->get();
-
-                                        \Illuminate\Support\Facades\Log::info('Inbounds for select:', [
-                                            'count' => $inbounds->count(),
-                                            'sample' => $inbounds->first()?->inbound_data
-                                        ]);
-
                                         $options = [];
+                                        $inbounds = \App\Models\Inbound::all();
+
                                         foreach ($inbounds as $inbound) {
                                             $data = $inbound->inbound_data;
-
-                                            // فقط اینباندهای فعال و معتبر
-                                            if (!is_array($data) ||
-                                                !isset($data['id']) ||
-                                                !isset($data['enable']) ||
-                                                $data['enable'] !== true) {
+                                            if (!is_array($data) || !isset($data['id']) || ($data['enable'] ?? false) !== true) {
                                                 continue;
                                             }
 
                                             $panelId = (string) $data['id'];
-                                            $label = $inbound->dropdown_label;
-
-                                            // اطمینان حاصل کن که label یه رشته ساده است
-                                            if (!is_string($label)) {
-                                                $label = strip_tags(json_encode($label));
-                                            }
-
-                                            $options[$panelId] = $label;
+                                            $options[$panelId] = sprintf(
+                                                '%s (ID: %s) - %s:%s',
+                                                $data['remark'] ?? 'بدون عنوان',
+                                                $panelId,
+                                                strtoupper($data['protocol'] ?? 'unknown'),
+                                                $data['port'] ?? '-'
+                                            );
                                         }
 
-                                        ksort($options);
                                         return $options;
                                     })
                                     ->getOptionLabelUsing(function ($value) {
-                                        if (blank($value)) {
-                                            return 'انتخاب نشده';
-                                        }
+                                        if (blank($value)) return 'انتخاب نشده';
 
-                                        $inbound = \App\Models\Inbound::all()->firstWhere(function ($i) use ($value) {
-                                            return isset($i->inbound_data['id']) &&
-                                                (string) $i->inbound_data['id'] === (string) $value;
+                                        $inbound = \App\Models\Inbound::firstWhere(function($item) use ($value) {
+                                            return isset($item->inbound_data['id']) && (string)$item->inbound_data['id'] === (string)$value;
                                         });
 
-                                        return $inbound?->dropdown_label ?? "⚠️ اینباند نامعتبر (ID: $value)";
+                                        return $inbound?->dropdown_label ?? "⚠️ نامعتبر (ID: $value)";
                                     })
-                                    ->dehydrateStateUsing(fn ($state) => $state ? (string) $state : null)
-                                    ->native(false) // مهم: از سلکت سفارشی فیلمنت استفاده کن
+                                    ->required(fn(Get $get) => $get('panel_type') === 'xui')
+                                    ->native(false)
                                     ->searchable()
                                     ->preload()
-                                    ->allowHtml()
-                                    ->placeholder('یک اینباند انتخاب کنید')
-                                    ->helperText('اگر لیست خالی است، ابتدا از بخش "اینباندها" Sync را بزنید و صفحه را رفرش کنید.'),
+                                    ->placeholder('ابتدا Sync از X-UI را بزنید و صفحه را رفرش کنید')
+                                    ->helperText(fn(Get $get) => $get('panel_type') === 'xui' ? 'این اینباند برای پرداخت‌های خودکار استفاده می‌شود' : ''),
 
                                 Radio::make('xui_link_type')->label('نوع لینک تحویلی')->options(['single' => 'لینک تکی', 'subscription' => 'لینک سابسکریپشن'])->default('single')
                                     ->required(fn(Get $get): bool => $get('panel_type') === 'xui'),
@@ -310,10 +291,34 @@ class ThemeSettings extends Page implements HasForms
         $formData = $this->form->getState();
 
         foreach ($formData as $key => $value) {
-            Setting::updateOrCreate(['key' => $key], ['value' => $value ?? '']);
+            // حذف تنظیمات خالی
+            if ($value === '' || $value === null) {
+                \App\Models\Setting::where('key', $key)->delete();
+                Cache::forget("setting.{$key}");
+                continue;
+            }
+
+            // 🔥 مهم: تبدیل xui_default_inbound_id به string ساده
+            if ($key === 'xui_default_inbound_id') {
+                $value = (string) $value;
+            }
+
+            // ذخیره مستقیم
+            \App\Models\Setting::updateOrCreate(
+                ['key' => $key],
+                ['value' => is_array($value) || is_object($value) ? json_encode($value) : $value]
+            );
+
+            Cache::forget("setting.{$key}");
         }
 
+        // پاک کردن کش‌های مرتبط
+        Cache::forget('inbounds_dropdown');
         Cache::forget('settings');
-        Notification::make()->title('تنظیمات با موفقیت ذخیره شد.')->success()->send();
+
+        Notification::make()
+            ->title('تنظیمات با موفقیت ذخیره شد.')
+            ->success()
+            ->send();
     }
 }

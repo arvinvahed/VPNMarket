@@ -41,6 +41,57 @@ class XUIService
         ]);
     }
 
+
+    public function getClients(int $inboundId): array
+    {
+        if (!$this->login()) {
+            Log::error('Cannot get clients: Login failed');
+            return [];
+        }
+
+        try {
+            $url = $this->baseUrl . $this->basePath . "/panel/api/inbounds/get/{$inboundId}";
+            $response = $this->getClient()->get($url);
+
+            if (!$response->successful()) {
+                Log::error('Failed to fetch inbound details', [
+                    'inbound_id' => $inboundId,
+                    'status' => $response->status(),
+                    'body' => $response->body()
+                ]);
+                return [];
+            }
+
+            $data = $response->json();
+
+
+            Log::debug('X-UI raw response for getClients', [
+                'inbound_id' => $inboundId,
+                'full_response' => $data
+            ]);
+
+            $clients = $data['obj']['settings']['clients'] ?? [];
+
+            Log::info('Successfully fetched clients', [
+                'inbound_id' => $inboundId,
+                'count' => count($clients),
+                'clients_list' => array_map(function($c) {
+                    return ['id' => $c['id'] ?? null, 'email' => $c['email'] ?? null, 'subId' => $c['subId'] ?? null];
+                }, $clients)
+            ]);
+
+            return $clients;
+
+        } catch (\Exception $e) {
+            Log::error('Exception while fetching clients', [
+                'message' => $e->getMessage(),
+                'inbound_id' => $inboundId,
+                'trace' => $e->getTraceAsString()
+            ]);
+            return [];
+        }
+    }
+
     public function login(): bool
     {
         if ($this->isLoggedIn) {

@@ -151,6 +151,12 @@ class WebhookController extends Controller
         $user = User::where('telegram_chat_id', $chatId)->first();
 
 
+        if ($user && !$this->isUserMemberOfChannel($user)) {
+            $this->showChannelRequiredMessage($chatId);
+            return;
+        }
+
+
         if (!$user) {
             $userFirstName = $message->getFrom()->getFirstName() ?? 'کاربر';
             $password = Str::random(10);
@@ -169,8 +175,10 @@ class WebhookController extends Controller
             }
 
 
-            $welcomeMessage = "🌟 خوش آمدید {$userFirstName} عزیز!\n\nبرای شروع، یکی از گزینه‌های منو را انتخاب کنید:";
 
+            $telegramSettings = \App\Models\TelegramBotSetting::pluck('value', 'key');
+            $welcomeMessage = $telegramSettings->get('welcome_message', "🌟 خوش آمدید {$userFirstName} عزیز!\n\nبرای شروع، یکی از گزینه‌های منو را انتخاب کنید:");
+            $welcomeMessage = str_replace('{userFirstName}', $userFirstName, $welcomeMessage);
             // این چک تکراری بود و حذف شد (چون بالا چک شده)
             // if (!$this->isUserMemberOfChannel($user)) {
             //     $this->showChannelRequiredMessage($chatId);
@@ -250,9 +258,12 @@ class WebhookController extends Controller
                 break;
 
             case '/start':
+                $telegramSettings = \App\Models\TelegramBotSetting::pluck('value', 'key');
+                $startMessage = $telegramSettings->get('start_message', 'سلام مجدد! لطفاً یک گزینه را انتخاب کنید:');
                 Telegram::sendMessage([
                     'chat_id' => $chatId,
-                    'text' => 'سلام مجدد! لطفاً یک گزینه را انتخاب کنید:',
+                    'text' => $this->escape($startMessage),
+                    'parse_mode' => 'MarkdownV2',
                     'reply_markup' => $this->getReplyMainMenu()
                 ]);
                 break;
@@ -275,7 +286,15 @@ class WebhookController extends Controller
         $data = $callbackQuery->getData();
         $user = User::where('telegram_chat_id', $chatId)->first();
 
-
+        if ($user && !$this->isUserMemberOfChannel($user)) {
+            $this->showChannelRequiredMessage($chatId, $messageId);
+            Telegram::answerCallbackQuery([
+                'callback_query_id' => $callbackQuery->getId(),
+                'text' => 'ابتدا باید در کانال عضو شوید!',
+                'show_alert' => true
+            ]);
+            return;
+        }
 
         if (Str::startsWith($data, 'show_duration_')) {
             $durationDays = (int)Str::after($data, 'show_duration_');
@@ -444,6 +463,11 @@ class WebhookController extends Controller
         $message = $update->getMessage();
         $chatId = $message->getChat()->getId();
         $user = User::where('telegram_chat_id', $chatId)->first();
+
+        if ($user && !$this->isUserMemberOfChannel($user)) {
+            $this->showChannelRequiredMessage($chatId);
+            return;
+        }
 
         // چک عضویت برای عکس‌ها
         if (!$user || !$this->isUserMemberOfChannel($user)) {
@@ -807,36 +831,53 @@ class WebhookController extends Controller
             return;
         }
 
+        // 1. ساخت نام کاربری استاندارد
+        $panelUsername = $order->panel_username;
+        if (empty($panelUsername)) {
+            $panelUsername = "user-{$user->id}-order-{$order->id}";
+        }
+
+        // 2. محاسبات زمان
         $expiresAt = Carbon::parse($order->expires_at);
         $now = now();
         $statusIcon = '🟢';
-        $remainingText = "*" . $this->escape($expiresAt->diffInDays($now) . ' روز') . "* باقی‌مانده";
+
+        $daysRemaining = $now->diffInDays($expiresAt, false);
+        $daysRemaining = (int) $daysRemaining;
 
         if ($expiresAt->isPast()) {
             $statusIcon = '⚫️';
             $remainingText = "*منقضی شده*";
-        } elseif ($expiresAt->diffInDays($now) <= 7) {
+        } elseif ($daysRemaining <= 7) {
             $statusIcon = '🟡';
-            $remainingText = "*" . $this->escape($expiresAt->diffInDays($now) . ' روز') . "* باقی‌مانده (تمدید کنید)";
+            $remainingText = "*" . $this->escape($daysRemaining . ' روز') . "* باقی‌مانده (تمدید کنید)";
+        } else {
+            $remainingText = "*" . $this->escape($daysRemaining . ' روز') . "* باقی‌مانده";
         }
 
-        // ساخت پیام با اطلاعات کامل
-        $message = "🔍 *جزئیات سرویس #{$order->id}*\n\n";
-        $message .= "{$statusIcon} *سرویس:* " . $this->escape($order->plan->name) . "\n";
-        if ($order->panel_username) {
-            $message .= "👤 *نام کاربری:* `" . $this->escape($order->panel_username) . "`\n";
-        }
-        $message .= "🗓 *انقضا:* " . $this->escape($expiresAt->format('Y/m/d')) . " - " . $remainingText . "\n";
-        $message .= "📦 *حجم:* " . $this->escape($order->plan->volume_gb . ' گیگابایت') . "\n";
+        // ساخت پیام
+        $message = "🔍 جزئیات سرویس #{$order->id}\n\n";
 
+        $message .= "{$statusIcon} سرویس: " . $this->escape($order->plan->name) . "\n";
+
+
+        $message .= "👤 نام کاربری: `" . $panelUsername . "`\n";
+
+
+        $message .= "🗓 انقضا: " . $this->escape($expiresAt->format('Y/m/d')) . " - " . $remainingText . "\n";
+
+
+        $message .= "📦  حجم:  " . $this->escape($order->plan->volume_gb . ' گیگابایت') . "\n";
         if (!empty($order->config_details)) {
-            $message .= "\n🔗 *لینک اتصال:*\n`" . $order->config_details . "`\n";
+
+
+            $message .= "\n🔗 *لینک اتصال:*\n" . $order->config_details;
+
         } else {
             $message .= "\n⏳ *در حال آماده‌سازی کانفیگ...*";
         }
 
         $keyboard = Keyboard::make()->inline();
-
 
         if (!empty($order->config_details)) {
             $keyboard->row([
@@ -844,11 +885,9 @@ class WebhookController extends Controller
             ]);
         }
 
-
         $keyboard->row([
             Keyboard::inlineButton(['text' => "🔄 تمدید سرویس", 'callback_data' => "renew_order_{$order->id}"])
         ]);
-
 
         $keyboard->row([
             Keyboard::inlineButton(['text' => '⬅️ بازگشت به لیست سرویس‌ها', 'callback_data' => '/my_services'])
@@ -856,7 +895,6 @@ class WebhookController extends Controller
 
         $this->sendOrEditMessage($user->telegram_chat_id, $message, $keyboard, $messageId);
     }
-
     protected function sendRawMarkdownMessageWithPreview($chatId, $text, $keyboard, $messageId = null, $disablePreview = false)
     {
         $payload = [
@@ -1046,22 +1084,41 @@ class WebhookController extends Controller
 
     protected function sendTutorial($platform, $chatId, $messageId = null)
     {
-        $tutorials = [
-            'android' => "*راهنمای اندروید \\(V2rayNG\\)*\n\n1\\. برنامه V2rayNG را از [این لینک](https://github.com/2dust/v2rayNG/releases) دانلود و نصب کنید\\.\n2\\. لینک کانفیگ را از بخش *سرویس‌های من* کپی کنید\\.\n3\\. در برنامه، روی علامت `+` بزنید و `Import config from Clipboard` را انتخاب کنید\\.\n4\\. کانفیگ اضافه شده را انتخاب و دکمه اتصال \\(V شکل\\) پایین صفحه را بزنید\\.",
-            'ios' => "*راهنمای آیفون \\(V2Box\\)*\n\n1\\. برنامه V2Box را از [اپ استور](https://apps.apple.com/us/app/v2box-v2ray-client/id6446814690) نصب کنید\\.\n2\\. لینک کانفیگ را از بخش *سرویس‌های من* کپی کنید\\.\n3\\. در برنامه، وارد بخش `Configs` شوید، روی `+` بزنید و `Import from clipboard` را انتخاب کنید\\.\n4\\. برای اتصال، به بخش `Home` بروید و دکمه اتصال را بزنید \\(ممکن است نیاز به تایید VPN در تنظیمات گوشی باشد\\)\\.",
-            'windows' => "*راهنمای ویندوز \\(V2rayN\\)*\n\n1\\. برنامه v2rayN را از [این لینک](https://github.com/2dust/v2rayN/releases) دانلود \\(فایل `v2rayN-With-Core.zip`\\) و از حالت فشرده خارج کنید\\.\n2\\. فایل `v2rayN.exe` را اجرا کنید\\.\n3\\. لینک کانفیگ را از بخش *سرویس‌های من* کپی کنید\\.\n4\\. در برنامه V2RayN، کلیدهای `Ctrl+V` را فشار دهید تا سرور اضافه شود\\.\n5\\. روی آیکون برنامه در تسک‌بار \\(کنار ساعت\\) راست کلیک کرده، از منوی `System Proxy` گزینه `Set system proxy` را انتخاب کنید تا تیک بخورد\\.\n6\\. برای اتصال، دوباره روی آیکون راست کلیک کرده و از منوی `Servers` کانفیگ اضافه شده را انتخاب کنید\\.",
-        ];
+        // Load settings from TelegramBotSetting
+        $telegramSettings = \App\Models\TelegramBotSetting::pluck('value', 'key');
 
-        $message = $tutorials[$platform] ?? "آموزش یافت نشد.";
+        // Map platform to setting key
+        $settingKey = match($platform) {
+            'android' => 'tutorial_android',
+            'ios' => 'tutorial_ios',
+            'windows' => 'tutorial_windows',
+            default => null
+        };
+
+        // Get tutorial from database or use fallback
+        $message = $settingKey ? ($telegramSettings->get($settingKey) ?? "آموزشی برای این پلتفرم یافت نشد.")
+            : "پلتفرم نامعتبر است.";
+
+        // If no tutorial is set in DB, use the old defaults as fallback
+        if ($message === "آموزشی برای این پلتفرم یافت نشد.") {
+            $fallbackTutorials = [
+                'android' => "*راهنمای اندروید \\(V2rayNG\\)*\n\n1\\. برنامه V2rayNG را از [این لینک](https://github.com/2dust/v2rayNG/releases) دانلود و نصب کنید\\.\n2\\. لینک کانفیگ را از بخش *سرویس‌های من* کپی کنید\\.\n3\\. در برنامه، روی علامت `+` بزنید و `Import config from Clipboard` را انتخاب کنید\\.\n4\\. کانفیگ اضافه شده را انتخاب و دکمه اتصال \\(V شکل\\) پایین صفحه را بزنید\\.",
+                'ios' => "*راهنمای آیفون \\(V2Box\\)*\n\n1\\. برنامه V2Box را از [اپ استور](https://apps.apple.com/us/app/v2box-v2ray-client/id6446814690) نصب کنید\\.\n2\\. لینک کانفیگ را از بخش *سرویس‌های من* کپی کنید\\.\n3\\. در برنامه، وارد بخش `Configs` شوید، روی `+` بزنید و `Import from clipboard` را انتخاب کنید\\.\n4\\. برای اتصال، به بخش `Home` بروید و دکمه اتصال را بزنید \\(ممکن است نیاز به تایید VPN در تنظیمات گوشی باشد\\)\\.",
+                'windows' => "*راهنمای ویندوز \\(V2rayN\\)*\n\n1\\. برنامه v2rayN را از [این لینک](https://github.com/2dust/v2rayN/releases) دانلود \\(فایل `v2rayN-With-Core.zip`\\) و از حالت فشرده خارج کنید\\.\n2\\. فایل `v2rayN.exe` را اجرا کنید\\.\n3\\. لینک کانفیگ را از بخش *سرویس‌های من* کپی کنید\\.\n4\\. در برنامه V2RayN، کلیدهای `Ctrl+V` را فشار دهید تا سرور اضافه شود\\.\n5\\. روی آیکون برنامه در تسک‌بار \\(کنار ساعت\\) راست کلیک کرده، از منوی `System Proxy` گزینه `Set system proxy` را انتخاب کنید تا تیک بخورد\\.\n6\\. برای اتصال، دوباره روی آیکون راست کلیک کرده و از منوی `Servers` کانفیگ اضافه شده را انتخاب کنید\\.",
+            ];
+            $message = $fallbackTutorials[$platform] ?? "آموزشی برای این پلتفرم یافت نشد.";
+        }
+
         $keyboard = Keyboard::make()->inline()->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت به آموزش‌ها', 'callback_data' => '/tutorials'])]);
 
         $payload = [
             'chat_id'      => $chatId,
-            'text'         => $message, // Already formatted
+            'text'         => $message, // Already contains MarkdownV2 formatting
             'parse_mode'   => 'MarkdownV2',
             'reply_markup' => $keyboard,
             'disable_web_page_preview' => true
         ];
+
         try {
             if ($messageId) {
                 $payload['message_id'] = $messageId;
@@ -1073,7 +1130,9 @@ class WebhookController extends Controller
             Log::warning("Could not edit/send tutorial message: " . $e->getMessage());
             if($messageId) {
                 unset($payload['message_id']);
-                try { Telegram::sendMessage($payload); } catch (\Exception $e2) {Log::error("Failed fallback send tutorial: " . $e2->getMessage());}
+                try { Telegram::sendMessage($payload); } catch (\Exception $e2) {
+                    Log::error("Failed fallback send tutorial: " . $e2->getMessage());
+                }
             }
         }
     }
@@ -1747,67 +1806,67 @@ class WebhookController extends Controller
     protected function isUserMemberOfChannel($user)
     {
         $forceJoin = $this->settings->get('force_join_enabled', '0');
-        if ($forceJoin !== '1') {
+
+        // Debug: لاگ وضعیت فورس جوین
+        Log::info("Force Join Check", [
+            'enabled_value' => $forceJoin,
+            'type' => gettype($forceJoin)
+        ]);
+
+        // چک کردن صحیح مقدار (ممکنه '1'، 1، true یا 'on' باشه)
+        if (!in_array($forceJoin, ['1', 1, true, 'on'], true)) {
+            Log::info("Force join is disabled, skipping membership check.");
             return true;
         }
 
         $channelId = $this->settings->get('telegram_required_channel_id');
-        if (!$channelId) {
-            Log::warning('Force join is enabled, but no "telegram_required_channel_id" is set in settings.');
-            return true;
+        if (empty($channelId)) {
+            Log::error('❌ FORCE JOIN IS ENABLED BUT NO CHANNEL ID IS SET!');
+            return false; // مهم: باید false بده تا دسترسی بسته بشه
         }
 
         try {
-            Log::info("DEBUG: Attempting getChatMember", [
+            Log::info("🔍 Checking membership...", [
+                'channel_id' => $channelId,
+                'user_chat_id' => $user->telegram_chat_id
+            ]);
+
+            // 🔥 استفاده از HTTP Facade برای درخواست مستقیم به API تلگرام
+            $botToken = $this->settings->get('telegram_bot_token');
+            $apiUrl = "https://api.telegram.org/bot{$botToken}/getChatMember";
+
+            $response = \Illuminate\Support\Facades\Http::timeout(10)->get($apiUrl, [
                 'chat_id' => $channelId,
-                'user_id' => $user->telegram_chat_id
+                'user_id' => $user->telegram_chat_id,
             ]);
 
-
-            $response = Telegram::getChatMember([
-                'chat_id' => $channelId,
-                'user_id' => $user->telegram_chat_id
-            ]);
-
-
-            if (!$response) {
-                Log::error("DEBUG: getChatMember returned a NULL or FALSE response.");
-                return false;
-            }
-
-
-            $responseData = $response->toArray();
-            Log::info("DEBUG: Raw Response Object Data", [
-                'data' => $responseData
-            ]);
-
-
-            $status = $responseData['status'] ?? null;
-
-            if ($status === null) {
-                Log::warning("DEBUG: 'status' property was NULL or not found in the raw response.", [
-                    'response_data' => $responseData
+            if (!$response->successful()) {
+                Log::error("❌ Telegram API request failed", [
+                    'status' => $response->status(),
+                    'body' => $response->body(),
+                    'channel_id' => $channelId,
+                    'user_id' => $user->telegram_chat_id
                 ]);
                 return false;
             }
 
-            Log::info("DEBUG: User status received (from raw data)", [
-                'chat_id' => $channelId,
+            $data = $response->json();
+            $status = $data['result']['status'] ?? 'left';
+
+            Log::info("✅ Membership check result", [
                 'user_id' => $user->telegram_chat_id,
+                'channel_id' => $channelId,
                 'status' => $status
             ]);
 
-            // 5. چک کردن وضعیت
-            return in_array($status, ['member', 'administrator', 'creator']);
+            return in_array($status, ['member', 'administrator', 'creator'], true);
 
         } catch (\Exception $e) {
-
-            Log::error("EXCEPTION during getChatMember: " . $e->getMessage(), [
-                'chat_id' => $channelId,
-                'user_id' => $user->telegram_chat_id,
-                'trace' => $e->getTraceAsString() // لاگ کامل خطا برای خطایابی
+            Log::error("❌ Exception in membership check", [
+                'error' => $e->getMessage(),
+                'channel_id' => $channelId,
+                'user_id' => $user->telegram_chat_id
             ]);
-
             return false;
         }
     }
@@ -1816,48 +1875,45 @@ class WebhookController extends Controller
 
     protected function showChannelRequiredMessage($chatId, $messageId = null)
     {
-        // آی‌دی کانال را از تنظیمات می‌خواند (چه @username باشد چه -100...)
         $channelId = $this->settings->get('telegram_required_channel_id');
 
-        if (!$channelId) {
-            // اگر کانالی در تنظیمات ست نشده بود
-            $this->sendOrEditMessage($chatId, "خطایی در تنظیمات ربات رخ داده است. لطفا با ادمین تماس بگیرید.", null, $messageId);
+        if (empty($channelId)) {
+            $message = "❌ خطا: کانال عضویت اجباری تنظیم نشده است.";
+            $this->sendOrEditMessage($chatId, $message, null, $messageId);
             return;
         }
 
+        // تشخیص نوع کانال و ساخت لینک
         $channelLink = null;
-        $channelName = $channelId; // اسم پیش‌فرض
+        $channelDisplayName = $channelId;
 
         if (str_starts_with($channelId, '@')) {
-            // این یک کانال عمومی با یوزرنیم است
+            // کانال عمومی
             $username = ltrim($channelId, '@');
             $channelLink = "https://t.me/{$username}";
-            $channelName = $channelId;
-        } elseif (str_starts_with($channelId, '-100')) {
-            // این یک کانال خصوصی با چت آی‌دی است
-            // ما نمی‌توانیم لینک جوین بسازیم، پس فقط نام "کانال" را نمایش می‌دهیم
-            $channelName = "کانال مورد نیاز";
-            // نکته: اگر می‌خواهید دکمه لینک برای کانال خصوصی هم باشد، باید
-            // یک فیلد جدید در ThemeSettings.php برای "لینک دعوت" بسازید.
+            $channelDisplayName = "@" . $username;
+        } elseif (preg_match('/^-100\d+$/', $channelId)) {
+            // کانال خصوصی (نیاز به لینک دعوت جداگانه)
+            $channelDisplayName = "کانال خصوصی";
+            // توصیه: در تنظیمات یک فیلد جدید بسازید: telegram_private_channel_invite_link
+            $channelLink = $this->settings->get('telegram_private_channel_invite_link');
         } else {
-            // فرمت ناشناخته است
-            $this->sendOrEditMessage($chatId, "خطایی در تنظیمات ربات رخ داده است. فرمت آی‌دی کانال نامعتبر است.", null, $messageId);
-            return;
+            Log::error("Invalid channel ID format", ['channel_id' => $channelId]);
         }
 
-        // پیام را می‌سازد
-        $message = "برای استفاده از ربات، ابتدا باید در کانال زیر عضو شوید:\n\n";
-        $message .= $this->escape($channelName) . "\n\n"; // از نام کانال استفاده می‌کند
-        $message .= "پس از عضویت، روی دکمه «بررسی عضویت» بزنید.";
+        // پیام بهتر
+        $message = "⛔️ *عضویت در کانال الزامی است!*\n\n";
+        $message .= "برای ادامه استفاده از ربات، باید در کانال زیر عضو شوید:\n\n";
+        $message .= "📢 {$channelDisplayName}\n\n";
+        $message .= "🔹 پس از عضویت، روی دکمه «✅ بررسی عضویت» بزنید.";
 
         $keyboard = Keyboard::make()->inline();
 
-        // فقط اگر لینک معتبر داریم (یعنی کانال عمومی است)، دکمه لینک را نشان بده
-        if ($channelLink) {
-            $keyboard->row([Keyboard::inlineButton(['text' => 'عضویت در کانال', 'url' => $channelLink])]);
+        // اگر لینک داریم، دکمه عضویت رو نشون بده
+        if (!empty($channelLink)) {
+            $keyboard->row([Keyboard::inlineButton(['text' => '📲 عضویت در کانال', 'url' => $channelLink])]);
         }
 
-        // دکمه بررسی عضویت همیشه هست
         $keyboard->row([Keyboard::inlineButton(['text' => '✅ بررسی عضویت', 'callback_data' => '/check_membership'])]);
 
         $this->sendOrEditMessage($chatId, $message, $keyboard, $messageId);
@@ -1954,28 +2010,47 @@ class WebhookController extends Controller
     protected function handleTrialRequest($user)
     {
 
-        $settings = Setting::all()->pluck('value', 'key');
+        // از تنظیماتی که قبلاً لود شده استفاده کن
+        $settings = $this->settings;
         $chatId = $user->telegram_chat_id;
 
+        // 🔍 لاگ برای دیباگ
+        Log::info('Trial request initiated', [
+            'user_id' => $user->id,
+            'trial_enabled_value' => $settings->get('trial_enabled'),
+            'trial_enabled_type' => gettype($settings->get('trial_enabled')),
+            'trial_accounts_taken' => $user->trial_accounts_taken ?? 0
+        ]);
 
-        if (($settings->get('trial_enabled') ?? '0') !== '1') {
-            Telegram::sendMessage(['chat_id' => $chatId, 'text' => $this->escape('❌ قابلیت دریافت اکانت تست در حال حاضر غیرفعال است.')]);
+        // ✅ مقایسه انعطاف‌پذیر (حل مشکل اصلی)
+        $trialEnabled = filter_var($settings->get('trial_enabled') ?? '0', FILTER_VALIDATE_BOOLEAN);
+        if (!$trialEnabled) {
+            Telegram::sendMessage([
+                'chat_id' => $chatId,
+                'text' => $this->escape('❌ قابلیت دریافت اکانت تست در حال حاضر غیرفعال است.')
+            ]);
+            Log::warning('Trial account is disabled in settings');
             return;
         }
 
-
+        // محدودیت تعداد اکانت‌ها
         $limit = (int) $settings->get('trial_limit_per_user', 1);
-        if ($user->trial_accounts_taken >= $limit) {
-            Telegram::sendMessage(['chat_id' => $chatId, 'text' => $this->escape('❗️شما قبلاً از اکانت تست خود استفاده کرده‌اید و دیگر مجاز به دریافت آن نیستید.')]);
+        $currentTrials = $user->trial_accounts_taken ?? 0;
+
+        if ($currentTrials >= $limit) {
+            Telegram::sendMessage([
+                'chat_id' => $chatId,
+                'text' => $this->escape('❗️شما قبلاً از اکانت تست خود استفاده کرده‌اید و دیگر مجاز به دریافت آن نیستید.')
+            ]);
+            Log::info('User trial limit reached', ['current' => $currentTrials, 'limit' => $limit]);
             return;
         }
 
         try {
-
             $volumeMB = (int) $settings->get('trial_volume_mb', 500);
             $durationHours = (int) $settings->get('trial_duration_hours', 24);
 
-            $uniqueUsername = "trial-{$user->id}-" . ($user->trial_accounts_taken + 1);
+            $uniqueUsername = "trial-{$user->id}-" . ($currentTrials + 1);
             $expiresAt = now()->addHours($durationHours);
             $dataLimitBytes = $volumeMB * 1024 * 1024;
 
@@ -2081,6 +2156,12 @@ class WebhookController extends Controller
                 $user->increment('trial_accounts_taken');
 
 
+                if (empty($configLink)) {
+                    throw new \Exception('لینک کانفیگ پس از ساخت کاربر دریافت نشد.');
+                }
+
+                // ذخیره و ارسال موفقیت‌آمیز
+                $user->increment('trial_accounts_taken');
 
                 $message = "✅ اکانت تست شما با موفقیت ساخته شد!\n\n";
                 $message .= "📦 حجم: *{$volumeMB} مگابایت*\n";
@@ -2092,14 +2173,29 @@ class WebhookController extends Controller
                     'text' => $this->escape($message),
                     'parse_mode' => 'MarkdownV2'
                 ]);
+
+
+                Log::info('Trial account created successfully', [
+                    'user_id' => $user->id,
+                    'username' => $uniqueUsername
+                ]);
             }
             else {
                 throw new \Exception('لینک کانفیگ پس از ساخت کاربر دریافت نشد.');
             }
 
         } catch (\Exception $e) {
-            Log::error('Trial Account Creation Failed: ' . $e->getMessage(), ['user_id' => $user->id]);
-            Telegram::sendMessage(['chat_id' => $chatId, 'text' => $this->escape('❌ متاسفانه در حال حاضر مشکلی در ساخت اکانت تست پیش آمده است. لطفاً بعداً تلاش کنید.')]);
+
+            Log::error('Trial Account Creation Failed', [
+                'user_id' => $user->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            Telegram::sendMessage([
+                'chat_id' => $chatId,
+                'text' => $this->escape('❌ خطا در ساخت اکانت تست. لطفاً بعداً تلاش کنید.')
+            ]);
         }
     }
 
