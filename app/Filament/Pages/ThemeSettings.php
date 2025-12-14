@@ -214,7 +214,7 @@ class ThemeSettings extends Page implements HasForms
 
                                         return $inbound?->dropdown_label ?? "⚠️ نامعتبر (ID: $value)";
                                     })
-//                                    ->required(fn(Get $get) => $get('panel_type') === 'xui')
+//                                   ->required(fn(Get $get) => $get('panel_type') === 'xui')
                                     ->native(false)
                                     ->searchable()
                                     ->preload()

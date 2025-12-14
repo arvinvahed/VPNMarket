@@ -18,9 +18,15 @@
                         <div>
                             <p class="text-sm text-gray-400">مبلغ قابل پرداخت</p>
                             <p class="font-bold text-3xl text-green-400">
-                                {{ number_format($order->plan->price ?? $order->amount) }}
+                                {{ number_format($finalAmount) }}
                                 <span class="text-lg font-normal text-gray-300">تومان</span>
                             </p>
+                            @if(session('discount_amount', 0) > 0)
+                                <p class="text-xs text-gray-400 mt-2">
+                                    <del>{{ number_format($order->plan->price ?? $order->amount) }}</del> تومان
+                                    با تخفیف {{ number_format(session('discount_amount')) }} تومان
+                                </p>
+                            @endif
                         </div>
                         <div>
                             <p class="text-sm text-gray-400">شماره کارت</p>

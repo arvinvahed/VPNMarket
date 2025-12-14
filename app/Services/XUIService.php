@@ -41,7 +41,6 @@ class XUIService
         ]);
     }
 
-
     public function getClients(int $inboundId): array
     {
         if (!$this->login()) {
@@ -64,13 +63,14 @@ class XUIService
 
             $data = $response->json();
 
-
             Log::debug('X-UI raw response for getClients', [
                 'inbound_id' => $inboundId,
                 'full_response' => $data
             ]);
 
-            $clients = $data['obj']['settings']['clients'] ?? [];
+            // 🔥 اصلاح اساسی: decode کردن رشته JSON settings
+            $settings = json_decode($data['obj']['settings'] ?? '{}', true);
+            $clients = $settings['clients'] ?? [];
 
             Log::info('Successfully fetched clients', [
                 'inbound_id' => $inboundId,
