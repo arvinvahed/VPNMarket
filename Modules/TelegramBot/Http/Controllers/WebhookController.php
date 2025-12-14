@@ -210,6 +210,11 @@ class WebhookController extends Controller
                 $orderId = Str::after($user->bot_state, 'awaiting_discount_code|');
                 $this->processDiscountCode($user, $orderId, $text);
             }
+            elseif (Str::startsWith($user->bot_state, 'awaiting_username_for_order|')) {
+                $planId = Str::after($user->bot_state, 'awaiting_username_for_order|');
+                $this->processUsername($user, $planId, $text);
+            }
+
             return;
         }
 
@@ -259,6 +264,61 @@ class WebhookController extends Controller
         }
     }
 
+
+    protected function processUsername($user, $planId, $username)
+    {
+
+        $username = trim($username);
+
+
+        if (strlen($username) < 3) {
+            Telegram::sendMessage([
+                'chat_id' => $user->telegram_chat_id,
+                'text' => $this->escape("❌ نام کاربری باید حداقل ۳ کاراکتر باشد."),
+                'parse_mode' => 'MarkdownV2'
+            ]);
+            $this->promptForUsername($user, $planId);
+            return;
+        }
+
+
+        if (!preg_match('/^[a-zA-Z0-9]+$/', $username)) {
+            Telegram::sendMessage([
+                'chat_id' => $user->telegram_chat_id,
+                'text' => $this->escape("❌ نام کاربری فقط می‌تواند شامل حروف انگلیسی و اعداد باشد."),
+                'parse_mode' => 'MarkdownV2'
+            ]);
+            $this->promptForUsername($user, $planId);
+            return;
+        }
+
+
+        $existingOrder = Order::where('panel_username', $username)->where('status', 'paid')->first();
+        if ($existingOrder) {
+            Telegram::sendMessage([
+                'chat_id' => $user->telegram_chat_id,
+                'text' => $this->escape("❌ این نام کاربری قبلاً استفاده شده است. لطفاً نام دیگری وارد کنید."),
+                'parse_mode' => 'MarkdownV2'
+            ]);
+            $this->promptForUsername($user, $planId);
+            return;
+        }
+
+
+        $user->update(['bot_state' => null]);
+        $this->startPurchaseProcess($user, $planId, $username);
+    }
+
+    protected function promptForUsername($user, $planId, $messageId = null)
+    {
+        $user->update(['bot_state' => 'awaiting_username_for_order|' . $planId]);
+        $keyboard = Keyboard::make()->inline()->row([Keyboard::inlineButton(['text' => '❌ انصراف', 'callback_data' => '/cancel_action'])]);
+        $message = "👤 *انتخاب نام کاربری سرویس*\n\n";
+        $message .= "لطفاً یک نام کاربری انگلیسی برای سرویس خود وارد کنید.\n";
+        $message .= "🔹 فقط حروف انگلیسی و اعداد مجاز است (حداقل ۳ حرف).\n";
+        $message .= "🔹 مثال: `arvin123` یا `myvpn`";
+        $this->sendOrEditMessage($user->telegram_chat_id, $message, $keyboard, $messageId);
+    }
 
     protected function handleCallbackQuery($update)
     {
@@ -315,7 +375,10 @@ class WebhookController extends Controller
 
         if (Str::startsWith($data, 'buy_plan_')) {
             $planId = Str::after($data, 'buy_plan_');
-            $this->startPurchaseProcess($user, $planId, $messageId);
+
+//            $this->startPurchaseProcess($user, $planId, $messageId);
+            $this->promptForUsername($user, $planId, $messageId);
+            return;
         } elseif (Str::startsWith($data, 'pay_wallet_')) {
             $input = Str::after($data, 'pay_wallet_');
             $this->processWalletPayment($user, $input, $messageId);
@@ -503,7 +566,7 @@ class WebhookController extends Controller
     // 🛒 سیستم خرید و تخفیف
     // ========================================================================
 
-    protected function startPurchaseProcess($user, $planId, $messageId)
+    protected function startPurchaseProcess($user, $planId, $username, $messageId = null)
     {
         $plan = Plan::find($planId);
         if (!$plan) {
@@ -517,7 +580,8 @@ class WebhookController extends Controller
             'source' => 'telegram',
             'amount' => $plan->price,
             'discount_amount' => 0,
-            'discount_code_id' => null
+            'discount_code_id' => null,
+            'panel_username' => $username
         ]);
 
         $this->showInvoice($user, $order, $messageId);
@@ -988,7 +1052,8 @@ class WebhookController extends Controller
                 $statusIcon = '🟡';
             }
 
-            $buttonText = "{$statusIcon} {$order->plan->name} (ID: #{$order->id})";
+            $username = $order->panel_username ?: "سرویس-{$order->id}";
+            $buttonText = "{$statusIcon} {$username} (ID: #{$order->id})";
 
             $keyboard->row([
                 Keyboard::inlineButton([
@@ -1240,7 +1305,16 @@ class WebhookController extends Controller
     {
         $settings = $this->settings;
         $configData = ['link' => null, 'username' => null];
-        $uniqueUsername = "user-{$order->user_id}-order-{$order->id}";
+//        $uniqueUsername = "user-{$order->user_id}-order-{$order->id}";
+
+        $uniqueUsername = $order->panel_username ?? "user-{$order->user_id}-order-{$order->id}";
+
+        Log::info('Creating XUI client', [
+            'inbound_id' => $inboundPanelId ?? 'N/A',
+            'email' => $uniqueUsername,
+            'generated_uuid' => $generated_uuid ?? 'N/A',
+            'generated_subId' => $generated_subId ?? 'N/A'
+        ]);
 
         try {
             if (($settings->get('panel_type') ?? 'marzban') === 'marzban') {
@@ -1519,6 +1593,7 @@ class WebhookController extends Controller
                     'amount' => $plan->price,
                     'expires_at' => null,
                     'payment_method' => 'wallet',
+                    'panel_username' => $originalOrder->panel_username,
                 ]);
 
                 $newRenewalOrder->renews_order_id = $originalOrder->id;
@@ -1542,10 +1617,6 @@ class WebhookController extends Controller
                 }
 
 
-                $originalOrder->update([
-                    'config_details' => $provisionData['link'],
-                    'panel_username' => $provisionData['username']
-                ]);
             });
 
 
@@ -1604,6 +1675,7 @@ class WebhookController extends Controller
             'source' => 'telegram_renewal',
             'amount' => $plan->price,
             'expires_at' => null,
+            'panel_username' => $originalOrder->panel_username,
 
         ]);
 
@@ -1618,8 +1690,9 @@ class WebhookController extends Controller
     {
         $settings = $this->settings;
         $user = $originalOrder->user;
-        $uniqueUsername = "user-{$user->id}-order-{$originalOrder->id}";
 
+
+        $uniqueUsername = $originalOrder->panel_username ?? "user-{$user->id}-order-{$originalOrder->id}";
         // محاسبه تاریخ انقضای جدید
         $currentExpiresAt = Carbon::parse($originalOrder->expires_at);
         $baseDate = $currentExpiresAt->isPast() ? now() : $currentExpiresAt;
@@ -1651,6 +1724,10 @@ class WebhookController extends Controller
 
                 if ($updateResponse !== null && $resetResponse !== null) {
                     Log::info("✅ Marzban: تمدید موفق", ['username' => $uniqueUsername]);
+
+                    $originalOrder->update([
+                        'expires_at' => $newExpiryDate
+                    ]);
 
                     return [
                         'link' => $originalOrder->config_details,
@@ -1726,6 +1803,11 @@ class WebhookController extends Controller
 
                 $response = $xui->updateClient($inboundData['id'], $client['id'], $clientData);
                 if ($response && isset($response['success']) && $response['success']) {
+
+                    $originalOrder->update([
+                        'expires_at' => $newExpiryDate
+                    ]);
+
                     return [
                         'link' => $originalOrder->config_details,
                         'username' => $uniqueUsername

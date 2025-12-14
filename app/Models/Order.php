@@ -3,7 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
-
+use Illuminate\Support\Facades\Log;
 class Order extends Model
 {
 
@@ -31,6 +31,18 @@ class Order extends Model
     {
 
         return view('payment.choose', ['plan' => $plan]);
+    }
+
+    protected static function boot()
+    {
+        parent::boot();
+
+        static::creating(function ($order) {
+            Log::info('Order is being created', [
+                'panel_username' => $order->panel_username,
+                'user_id' => $order->user_id
+            ]);
+        });
     }
 
     public function transactions()

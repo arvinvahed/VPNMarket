@@ -117,8 +117,8 @@ class OrderResource extends Resource
                                 Notification::make()->title('خطا')->body('سفارش اصلی جهت تمدید یافت نشد.')->danger()->send();
                                 return;
                             }
-                            $uniqueUsername = "user-{$user->id}-order-" . ($isRenewal ? $originalOrder->id : $order->id);
-                             $newExpiresAt = $isRenewal
+                            $uniqueUsername = $order->panel_username ?? "user-{$user->id}-order-". ($isRenewal ? $originalOrder->id : $order->id);
+                              $newExpiresAt = $isRenewal
                                 ? (new \DateTime($originalOrder->expires_at))->modify("+{$plan->duration_days} days")
                                 : now()->addDays($plan->duration_days);
 
