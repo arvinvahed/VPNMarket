@@ -376,10 +376,19 @@ class WebhookController extends Controller
         if (Str::startsWith($data, 'buy_plan_')) {
             $planId = Str::after($data, 'buy_plan_');
 
-//            $this->startPurchaseProcess($user, $planId, $messageId);
+
+            if (\Nwidart\Modules\Facades\Module::isEnabled('MultiServer')) {
+
+                $this->promptForLocation($user, $planId, $messageId);
+                return;
+            }
+
+
             $this->promptForUsername($user, $planId, $messageId);
             return;
-        } elseif (Str::startsWith($data, 'pay_wallet_')) {
+        }
+
+        elseif (Str::startsWith($data, 'pay_wallet_')) {
             $input = Str::after($data, 'pay_wallet_');
             $this->processWalletPayment($user, $input, $messageId);
         } elseif (Str::startsWith($data, 'pay_card_')) {
@@ -486,6 +495,34 @@ class WebhookController extends Controller
         }
     }
 
+    // نمایش لیست کشورها
+    protected function promptForLocation($user, $planId, $messageId)
+    {
+        $locations = \Modules\MultiServer\Models\Location::where('is_active', true)->get();
+
+        if ($locations->isEmpty()) {
+            // اگر هیچ لوکیشنی تعریف نشده بود، روال عادی رو طی کن
+            $this->promptForUsername($user, $planId, $messageId);
+            return;
+        }
+
+        $keyboard = Keyboard::make()->inline();
+
+        foreach ($locations as $loc) {
+            $flag = $loc->flag ?? '🏳️';
+            $keyboard->row([
+                Keyboard::inlineButton([
+                    'text' => "$flag {$loc->name}",
+                    'callback_data' => "select_loc_{$loc->id}_plan_{$planId}"
+                ])
+            ]);
+        }
+
+        $keyboard->row([Keyboard::inlineButton(['text' => '❌ انصراف', 'callback_data' => '/cancel_action'])]);
+
+        $this->sendOrEditMessage($user->telegram_chat_id, "🌍 *انتخاب لوکیشن*\n\nلطفاً کشور مورد نظر خود را برای اتصال انتخاب کنید:", $keyboard, $messageId);
+    }
+
     protected function handlePhotoMessage($update)
     {
         $message = $update->getMessage();
@@ -569,13 +606,35 @@ class WebhookController extends Controller
     protected function startPurchaseProcess($user, $planId, $username, $messageId = null)
     {
         $plan = Plan::find($planId);
+
         if (!$plan) {
             $this->sendOrEditMainMenu($user->telegram_chat_id, "❌ پلن مورد نظر یافت نشد.", $messageId);
             return;
         }
 
+        $serverId = null;
+
+
+        if ($user->bot_state && Str::contains($user->bot_state, 'selected_loc:')) {
+            $stateParts = explode('|', $user->bot_state);
+            $locPart = $stateParts[0];
+            $locationId = Str::after($locPart, ':');
+
+
+            $bestServer = \Modules\MultiServer\Models\Server::where('location_id', $locationId)
+                ->where('is_active', true)
+                ->whereRaw('current_users < capacity')
+                ->orderBy('current_users', 'asc')
+                ->first();
+
+            if ($bestServer) {
+                $serverId = $bestServer->id;
+            }
+        }
+
         $order = $user->orders()->create([
             'plan_id' => $plan->id,
+            'server_id' => $serverId,
             'status' => 'pending',
             'source' => 'telegram',
             'amount' => $plan->price,
@@ -583,6 +642,9 @@ class WebhookController extends Controller
             'discount_code_id' => null,
             'panel_username' => $username
         ]);
+
+
+        $user->update(['bot_state' => null]);
 
         $this->showInvoice($user, $order, $messageId);
     }
@@ -1305,132 +1367,238 @@ class WebhookController extends Controller
     protected function provisionUserAccount(Order $order, Plan $plan)
     {
         $settings = $this->settings;
-        $configData = ['link' => null, 'username' => null];
-//        $uniqueUsername = "user-{$order->user_id}-order-{$order->id}";
-
         $uniqueUsername = $order->panel_username ?? "user-{$order->user_id}-order-{$order->id}";
+        $configData = ['link' => null, 'username' => null];
 
-        Log::info('Creating XUI client', [
-            'inbound_id' => $inboundPanelId ?? 'N/A',
-            'email' => $uniqueUsername,
-            'generated_uuid' => $generated_uuid ?? 'N/A',
-            'generated_subId' => $generated_subId ?? 'N/A'
-        ]);
+
+        $isMultiServer = false;
+        $panelType = $settings->get('panel_type') ?? 'marzban';
+
+
+        $xuiHost = $settings->get('xui_host');
+        $xuiUser = $settings->get('xui_user');
+        $xuiPass = $settings->get('xui_pass');
+        $inboundId = (int) $settings->get('xui_default_inbound_id');
+
+        // ============================================================
+        // 1. بررسی سیستم مولتی سرور (MultiServer Check)
+        // ============================================================
+        if (\Nwidart\Modules\Facades\Module::isEnabled('MultiServer') && $order->server_id) {
+            $targetServer = \Modules\MultiServer\Models\Server::find($order->server_id);
+
+            if ($targetServer && $targetServer->is_active) {
+
+                $isMultiServer = true;
+                $panelType = 'xui';
+
+
+                $xuiHost = $targetServer->full_host;
+                $xuiUser = $targetServer->username;
+                $xuiPass = $targetServer->password;
+                $inboundId = $targetServer->inbound_id;
+
+
+                $targetServer->increment('current_users');
+
+                Log::info("🚀 Provisioning on MultiServer Location: {$targetServer->name}", [
+                    'server_id' => $targetServer->id,
+                    'host' => $xuiHost
+                ]);
+            }
+        }
 
         try {
-            if (($settings->get('panel_type') ?? 'marzban') === 'marzban') {
-                $marzban = new MarzbanService($settings->get('marzban_host'), $settings->get('marzban_sudo_username'), $settings->get('marzban_sudo_password'), $settings->get('marzban_node_hostname'));
+            // ==========================================
+            // پنل MARZBAN (فقط در حالت تک سرور)
+            // ==========================================
+            if ($panelType === 'marzban' && !$isMultiServer) {
+                $marzban = new MarzbanService(
+                    $settings->get('marzban_host'),
+                    $settings->get('marzban_sudo_username'),
+                    $settings->get('marzban_sudo_password'),
+                    $settings->get('marzban_node_hostname')
+                );
                 $response = $marzban->createUser([
                     'username' => $uniqueUsername,
                     'proxies' => (object) [],
                     'expire' => $order->expires_at->timestamp,
                     'data_limit' => $plan->volume_gb * 1024 * 1024 * 1024,
                 ]);
+
                 if (!empty($response['subscription_url'])) {
                     $configData['link'] = $response['subscription_url'];
                     $configData['username'] = $uniqueUsername;
                 } else {
-                    Log::error('Marzban user creation failed or subscription URL missing.', ['response' => $response]);
+                    Log::error('Marzban user creation failed.', ['response' => $response]);
                     return null;
                 }
-            } elseif ($settings->get('panel_type') === 'xui') {
-                $inboundPanelId = (int) $settings->get('xui_default_inbound_id');
-                Log::info('XUI: Searching for inbound', ['panel_id' => $inboundPanelId]);
+            }
+            // ==========================================
+            // پنل X-UI (SANAEI) -
+            // ==========================================
+            elseif ($panelType === 'xui') {
 
-                $inboundModel = null;
-                $inboundModel = \App\Models\Inbound::whereRaw('JSON_EXTRACT(inbound_data, "$.id") = ?', [$inboundPanelId])->first();
+                if ($inboundId <= 0) {
+                    throw new \Exception("Inbound ID نامعتبر است (تنظیمات یا سرور را چک کنید).");
+                }
 
-                if (!$inboundModel) {
-                    $allInbounds = \App\Models\Inbound::all();
-                    foreach ($allInbounds as $inbound) {
-                         $data = is_string($inbound->inbound_data) ? json_decode($inbound->inbound_data, true) : $inbound->inbound_data;
 
-                        if (isset($data['id']) && $data['id'] == $inboundPanelId) {
-                            $inboundModel = $inbound;
-                            Log::info('XUI: Inbound found manually', ['inbound_id' => $inboundModel->id]);
+                $xui = new \App\Services\XUIService($xuiHost, $xuiUser, $xuiPass);
+
+                if (!$xui->login()) {
+                    throw new \Exception("❌ خطا در لاگین به پنل X-UI (" . ($isMultiServer ? 'MultiServer' : 'Single') . ")");
+                }
+
+
+                $inboundData = null;
+
+                if ($isMultiServer) {
+
+                    $allInbounds = $xui->getInbounds();
+                    foreach ($allInbounds as $remoteInbound) {
+                        if ($remoteInbound['id'] == $inboundId) {
+                            $inboundData = $remoteInbound;
                             break;
                         }
                     }
+                    if (!$inboundData) {
+                        throw new \Exception("اینباند با ID {$inboundId} در سرور مقصد پیدا نشد.");
+                    }
+                } else {
+
+                    $inboundModel = \App\Models\Inbound::whereRaw('JSON_EXTRACT(inbound_data, "$.id") = ?', [$inboundId])->first();
+                    if (!$inboundModel) {
+
+                        $allInboundsDB = \App\Models\Inbound::all();
+                        foreach ($allInboundsDB as $item) {
+                            $d = is_string($item->inbound_data) ? json_decode($item->inbound_data, true) : $item->inbound_data;
+                            if (isset($d['id']) && $d['id'] == $inboundId) {
+                                $inboundModel = $item;
+                                break;
+                            }
+                        }
+                    }
+
+                    if ($inboundModel) {
+                        $inboundData = is_string($inboundModel->inbound_data) ? json_decode($inboundModel->inbound_data, true) : $inboundModel->inbound_data;
+                    } else {
+                        throw new \Exception("اینباند پیش‌فرض در دیتابیس سایت یافت نشد.");
+                    }
                 }
 
-                if (!$inboundModel) {
-                    Log::error("XUI Inbound not found for Panel ID: {$inboundPanelId}");
-                    return null;
-                }
 
-                $xui = new \App\Services\XUIService($settings->get('xui_host'), $settings->get('xui_user'), $settings->get('xui_pass'));
                 $clientData = [
                     'email' => $uniqueUsername,
                     'total' => $plan->volume_gb * 1024 * 1024 * 1024,
                     'expiryTime' => $order->expires_at->timestamp * 1000,
                 ];
 
-                $response = $xui->addClient($inboundPanelId, $clientData);
+                $response = $xui->addClient($inboundId, $clientData);
 
                 if ($response && isset($response['success']) && $response['success']) {
-                    $inboundData = $inboundModel->inbound_data;
+
+
                     $linkType = $settings->get('xui_link_type', 'single');
                     $configLink = null;
 
-                    if ($linkType === 'subscription') {
+                    if ($linkType === 'subscription' && !$isMultiServer) {
+
                         $subId = $response['generated_subId'] ?? $uniqueUsername;
                         $subBaseUrl = rtrim($settings->get('xui_subscription_url_base'), '/');
-                        if ($subBaseUrl && $subId !== $uniqueUsername) {
+                        if ($subBaseUrl) {
                             $configLink = $subBaseUrl . '/sub/' . $subId;
-                        } else {
-                            Log::error("XUI Subscription: base URL or subId missing.", [
-                                'base_url' => $subBaseUrl,
-                                'subId' => $subId,
-                                'response' => $response
-                            ]);
-                            return null;
-                        }
-                    } else {
-                        $clientSettings = json_decode($response['obj']['settings'] ?? '{}', true);
-                        $uuid = $response['generated_uuid'] ?? $response['obj']['id'] ?? null;
-                        if ($uuid){
-                            $streamSettings = $inboundData['streamSettings'] ?? [];
-                            $serverAddress = $settings->get('server_address_for_link', parse_url($settings->get('xui_host'), PHP_URL_HOST));
-                            $port = $inboundData['port'] ?? 443;
-                            $remark = $plan->name;
-                            $params = [];
-                            $params['type'] = $streamSettings['network'] ?? 'tcp';
-                            $params['security'] = $streamSettings['security'] ?? 'none';
-                            if($params['type'] === 'ws' && isset($streamSettings['wsSettings'])){
-                                $params['path'] = $streamSettings['wsSettings']['path'] ?? '/';
-                                $params['host'] = $streamSettings['wsSettings']['headers']['Host'] ?? $serverAddress;
-                            }
-                            if($params['security'] === 'tls' && isset($streamSettings['tlsSettings'])){
-                                $params['sni'] = $streamSettings['tlsSettings']['serverName'] ?? $serverAddress;
-                            }
-                            $flow = $clientSettings['clients'][0]['flow'] ?? '';
-                            if ($flow) {
-                                $params['flow'] = $flow;
-                            }
-                            $queryString = http_build_query(array_filter($params));
-                            $configLink = "vless://{$uuid}@{$serverAddress}:{$port}?{$queryString}#" . urlencode($remark . " - " . $uniqueUsername);
-                        } else {
-                            Log::error('Could not extract UUID from XUI response.', ['response' => $response]);
-                            return null;
                         }
                     }
 
-                    $configData['link'] = $configLink;
+
+                    if (empty($configLink)) {
+                        $uuid = $response['generated_uuid'] ?? $response['obj']['id'] ?? null;
+
+
+                        if (!$uuid) {
+
+                            $clients = $xui->getClients($inboundId);
+                            $createdClient = collect($clients)->firstWhere('email', $uniqueUsername);
+                            $uuid = $createdClient['id'] ?? null;
+                        }
+
+                        if ($uuid) {
+
+                            $streamData = $inboundData['streamSettings'] ?? [];
+                            $streamSettings = is_string($streamData) ? json_decode($streamData, true) : $streamData;
+
+
+                            $serverAddress = $isMultiServer
+                                ? parse_url($xuiHost, PHP_URL_HOST)
+                                : $settings->get('server_address_for_link', parse_url($xuiHost, PHP_URL_HOST));
+
+                            $port = $inboundData['port'] ?? 443;
+                            $remark = $plan->name . ($isMultiServer ? " | " . $targetServer->location->name : "");
+
+
+                            $protocol = $inboundData['protocol'] ?? 'vless';
+
+                            if ($protocol === 'vless') {
+                                $params = [];
+                                $params['type'] = $streamSettings['network'] ?? 'tcp';
+                                $params['security'] = $streamSettings['security'] ?? 'none';
+
+                                if($params['type'] === 'ws' && isset($streamSettings['wsSettings'])){
+                                    $params['path'] = $streamSettings['wsSettings']['path'] ?? '/';
+                                    $params['host'] = $streamSettings['wsSettings']['headers']['Host'] ?? $serverAddress;
+                                }
+                                if($params['security'] === 'tls' && isset($streamSettings['tlsSettings'])){
+                                    $params['sni'] = $streamSettings['tlsSettings']['serverName'] ?? $serverAddress;
+                                }
+                                $queryString = http_build_query(array_filter($params));
+                                $configLink = "vless://{$uuid}@{$serverAddress}:{$port}?{$queryString}#" . rawurlencode($remark);
+                            }
+                            elseif ($protocol === 'vmess') {
+
+                                $vmessJson = [
+                                    "v" => "2",
+                                    "ps" => $remark,
+                                    "add" => $serverAddress,
+                                    "port" => (string)$port,
+                                    "id" => $uuid,
+                                    "aid" => "0",
+                                    "scy" => "auto",
+                                    "net" => $streamSettings['network'] ?? 'tcp',
+                                    "type" => "none",
+                                    "host" => "",
+                                    "path" => "",
+                                    "tls" => $streamSettings['security'] ?? ""
+                                ];
+                                if($vmessJson['net'] === 'ws') {
+                                    $vmessJson['path'] = $streamSettings['wsSettings']['path'] ?? '/';
+                                    $vmessJson['host'] = $streamSettings['wsSettings']['headers']['Host'] ?? $serverAddress;
+                                }
+                                $configLink = "vmess://" . base64_encode(json_encode($vmessJson));
+                            }
+
+                        }
+                    }
+
+                    $configData['link'] = $configLink ?: "لینک ساخته شد اما قابل نمایش نیست (خطای تولید لینک)";
                     $configData['username'] = $uniqueUsername;
-                    Log::info('XUI: Link generated successfully', ['link' => $configLink]);
+                    Log::info('XUI: Client created successfully', ['link' => $configLink]);
+
                 } else {
-                    Log::error('XUI user creation failed.', ['response' => $response]);
-                    return null;
+                    $errMsg = $response['msg'] ?? 'Unknown Error';
+                    throw new \Exception("خطا در ساخت کاربر در پنل: " . $errMsg);
                 }
             }
         } catch (\Exception $e) {
             Log::error("Failed to provision account for Order {$order->id}: " . $e->getMessage());
+
+            if (isset($targetServer)) {
+                $targetServer->decrement('current_users');
+            }
             return null;
         }
 
         return $configData;
     }
-
     protected function showDepositOptions($user, $messageId)
     {
         $message = "💳 *شارژ کیف پول*\n\nلطفاً مبلغ مورد نظر برای شارژ را انتخاب کنید یا مبلغ دلخواه خود را وارد نمایید:";
