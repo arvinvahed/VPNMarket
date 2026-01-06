@@ -2,5 +2,6 @@
     "Ticketing": true,
     "TelegramBot": true,
     "Referral": true,
-    "Blog": true
+    "Blog": true,
+    "MultiServer": true
 }
