@@ -269,6 +269,49 @@ class XUIService
         }
     }
 
+    public function resetClientTraffic(int $inboundId, string $email): bool
+    {
+        if (!$this->login()) {
+            Log::error('Cannot reset traffic: Login failed');
+            return false;
+        }
+
+        try {
+            // ✅ FIX: ساختار URL طبق داکیومنت رسمی 3x-ui
+            // POST /panel/api/inbounds/{inboundId}/resetClientTraffic/{email}
+            $url = $this->baseUrl . $this->basePath . "/panel/api/inbounds/{$inboundId}/resetClientTraffic/" . rawurlencode($email);
+
+            Log::info('Resetting XUI client traffic', [
+                'url' => $url,
+                'inbound_id' => $inboundId,
+                'email' => $email
+            ]);
+
+            $response = $this->getClient()->post($url);
+
+            if ($response->successful() && $response->json('success')) {
+                Log::info('✅ Client traffic reset successfully', ['email' => $email]);
+                return true;
+            } else {
+                Log::error('❌ Failed to reset client traffic', [
+                    'status' => $response->status(),
+                    'body' => $response->body(),
+                    'inbound_id' => $inboundId,
+                    'email' => $email
+                ]);
+                return false;
+            }
+
+        } catch (\Exception $e) {
+            Log::error('Exception in resetClientTraffic', [
+                'message' => $e->getMessage(),
+                'inbound_id' => $inboundId,
+                'email' => $email,
+                'trace' => $e->getTraceAsString()
+            ]);
+            return false;
+        }
+    }
     public function updateClient(int $inboundId, string $clientId, array $clientData): ?array
     {
         if (!$this->login()) {

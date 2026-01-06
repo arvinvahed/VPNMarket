@@ -1,5 +1,6 @@
 {
     "Ticketing": true,
     "TelegramBot": true,
-    "Referral": true
+    "Referral": true,
+    "Blog": true
 }

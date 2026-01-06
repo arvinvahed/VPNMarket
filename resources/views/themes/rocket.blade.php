@@ -34,6 +34,11 @@
                     <li class="nav-item"><a class="nav-link" href="#features">ویژگی‌ها</a></li>
                     <li class="nav-item"><a class="nav-link" href="#pricing">پلن‌ها</a></li>
                     <li class="nav-item"><a class="nav-link" href="#faq">سوالات</a></li>
+
+                    @if(\Nwidart\Modules\Facades\Module::isEnabled('Blog'))
+                        <li class="nav-item"><a class="nav-link" href="{{ route('blog.index') }}">وبلاگ</a></li>
+                    @endif
+
                 </ul>
                 <a href="{{ route('login') }}" class="btn btn-fire btn-sm">ورود / ثبت‌نام</a>
             </div>

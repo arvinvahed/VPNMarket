@@ -1,10 +1,8 @@
 <?php
 
-
 namespace App\Providers\Filament;
+
 use App\Filament\Widgets\VpnMarketInfoWidget;
-use Filament\Widgets\AccountWidget;
-use Filament\FontProviders\LocalFontProvider;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\DisableBladeIconComponents;
 use Filament\Http\Middleware\DispatchServingFilamentEvent;
@@ -13,6 +11,7 @@ use Filament\Panel;
 use Filament\PanelProvider;
 use Filament\Support\Colors\Color;
 use Filament\Widgets;
+use Filament\FontProviders\LocalFontProvider;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Http\Middleware\VerifyCsrfToken;
@@ -26,7 +25,7 @@ class AdminPanelProvider extends PanelProvider
 {
     public function panel(Panel $panel): Panel
     {
-
+        // تنظیمات اصلی پنل
         $panel
             ->default()
             ->id('admin')
@@ -53,11 +52,8 @@ class AdminPanelProvider extends PanelProvider
             ])
             ->discoverWidgets(in: app_path('Filament/Widgets'), for: 'App\\Filament\\Widgets')
             ->widgets([
-
                 Widgets\AccountWidget::class,
                 VpnMarketInfoWidget::class,
-
-
             ])
             ->middleware([
                 EncryptCookies::class,
@@ -74,13 +70,45 @@ class AdminPanelProvider extends PanelProvider
                 Authenticate::class,
             ]);
 
-
+        // ----------------------------------------------------------
+        // لود کردن خودکار ریسورس‌های ماژول‌ها (Blog, Referral, ...)
+        // ----------------------------------------------------------
         foreach (Module::getOrdered() as $module) {
             if ($module->isEnabled()) {
+                $moduleName = $module->getName();
+                $modulePath = $module->getPath();
 
-                $panel->discoverResources(in: $module->getPath() . '/Filament/Resources', for: 'Modules\\' . $module->getName() . '\\Filament\\Resources');
-                $panel->discoverPages(in: $module->getPath() . '/Filament/Pages', for: 'Modules\\' . $module->getName() . '\\Filament\\Pages');
-                $panel->discoverWidgets(in: $module->getPath() . '/Filament/Widgets', for: 'Modules\\' . $module->getName() . '\\Filament\\Widgets');
+
+                if (is_dir($modulePath . '/Filament/Resources')) {
+                    $panel->discoverResources(
+                        in: $modulePath . '/Filament/Resources',
+                        for: "Modules\\{$moduleName}\\Filament\\Resources"
+                    );
+                }
+
+
+                if (is_dir($modulePath . '/Filament/Pages')) {
+                    $panel->discoverPages(
+                        in: $modulePath . '/Filament/Pages',
+                        for: "Modules\\{$moduleName}\\Filament\\Pages"
+                    );
+                }
+
+                // لود کردن Widgets (ویجت‌های داشبورد ماژول)
+                if (is_dir($modulePath . '/Filament/Widgets')) {
+                    $panel->discoverWidgets(
+                        in: $modulePath . '/Filament/Widgets',
+                        for: "Modules\\{$moduleName}\\Filament\\Widgets"
+                    );
+                }
+
+
+                if (is_dir($modulePath . '/Filament/Clusters')) {
+                    $panel->discoverClusters(
+                        in: $modulePath . '/Filament/Clusters',
+                        for: "Modules\\{$moduleName}\\Filament\\Clusters"
+                    );
+                }
             }
         }
 

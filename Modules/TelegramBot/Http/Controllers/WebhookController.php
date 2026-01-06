@@ -760,8 +760,8 @@ class WebhookController extends Controller
 
             $order->refresh();
             $link = $order->config_details;
-            $this->sendOrEditMessage($user->telegram_chat_id, "✅ خرید موفق!\n\nلینک کانفیگ:\n`{$link}`", Keyboard::make()->inline()->row([Keyboard::inlineButton(['text' => '🛠 سرویس‌های من', 'callback_data' => '/my_services']), Keyboard::inlineButton(['text' => '🏠 منوی اصلی', 'callback_data' => '/start'])]), $messageId);
 
+            $this->sendOrEditMessage($user->telegram_chat_id, "✅ خرید موفق!\n\nلینک کانفیگ:\n{$link}", Keyboard::make()->inline()->row([Keyboard::inlineButton(['text' => '🛠 سرویس‌های من', 'callback_data' => '/my_services']), Keyboard::inlineButton(['text' => '🏠 منوی اصلی', 'callback_data' => '/start'])]), $messageId);
         } catch (\Exception $e) {
             Log::error('Wallet Payment Failed: ' . $e->getMessage(), ['trace' => $e->getTraceAsString(), 'plan_id' => $plan->id ?? null, 'user_id' => $user->id]);
             if ($order && $order->exists) {
@@ -953,12 +953,13 @@ class WebhookController extends Controller
         }
 
         try {
+
             $configLink = trim($order->config_details);
 
-            $qrUrl = "https://api.qrserver.com/v1/create-qr-code/? " . http_build_query([
+            $qrUrl = "https://api.qrserver.com/v1/create-qr-code/?" . http_build_query([
                     'size' => '400x400',
                     'data' => $configLink,
-                    'ecc' => 'H',
+                    'ecc' => 'M',
                     'margin' => 10,
                     'color' => '000000',
                     'bgcolor' => 'FFFFFF',
@@ -969,13 +970,14 @@ class WebhookController extends Controller
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
             curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
             curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-            curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 15);
             $qrData = curl_exec($ch);
             $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $curlError = curl_error($ch);
             curl_close($ch);
 
             if ($qrData === false || $httpCode !== 200) {
-                throw new \Exception('دریافت QR Code ناموفق بود. کد: ' . $httpCode);
+                throw new \Exception("دریافت QR Code ناموفق بود. کد: {$httpCode} - خطا: {$curlError}");
             }
 
             $tempFile = tempnam(sys_get_temp_dir(), 'qr_') . '.png';
@@ -991,12 +993,12 @@ class WebhookController extends Controller
             Telegram::sendPhoto([
                 'chat_id' => $user->telegram_chat_id,
                 'photo' => InputFile::create($tempFile),
-                'caption' => $this->escape("📱 QR Code برای سرویس #{$order->id}\n\nلینک: `{$configLink}`"),
+                'caption' => $this->escape("📱 QR Code برای سرویس #{$order->id}\n\nلینک: {$configLink}"),
                 'parse_mode' => 'MarkdownV2',
                 'reply_markup' => $keyboard
             ]);
 
-            unlink($tempFile);
+            @unlink($tempFile);
 
         } catch (\Exception $e) {
             Log::error('QR Code Generation FAILED', [
@@ -1008,12 +1010,11 @@ class WebhookController extends Controller
 
             Telegram::sendMessage([
                 'chat_id' => $user->telegram_chat_id,
-                'text' => $this->escape("❌ خطا در تولید QR Code: " . $e->getMessage()),
+                'text' => $this->escape("❌ خطا در تولید QR Code. لطفاً لینک را کپی کنید."),
                 'parse_mode' => 'MarkdownV2'
             ]);
         }
     }
-
     protected function sendMyServices($user, $messageId = null)
     {
         $orders = $user->orders()->with('plan')
@@ -1342,7 +1343,8 @@ class WebhookController extends Controller
                 if (!$inboundModel) {
                     $allInbounds = \App\Models\Inbound::all();
                     foreach ($allInbounds as $inbound) {
-                        $data = json_decode($inbound->inbound_data, true);
+                         $data = is_string($inbound->inbound_data) ? json_decode($inbound->inbound_data, true) : $inbound->inbound_data;
+
                         if (isset($data['id']) && $data['id'] == $inboundPanelId) {
                             $inboundModel = $inbound;
                             Log::info('XUI: Inbound found manually', ['inbound_id' => $inboundModel->id]);
@@ -1621,12 +1623,20 @@ class WebhookController extends Controller
 
 
             $newExpiryDate = Carbon::parse($originalOrder->refresh()->expires_at);
-            $successMessage = $this->escape(
-                "✅ سرویس شما با موفقیت برای {$plan->duration_days} روز دیگر تمدید شد.\n" .
-                "📅 تاریخ انقضای جدید: {$newExpiryDate->format('Y/m/d')}\n\n" .
-                "🔗 لینک کانفیگ شما (بدون تغییر):\n`{$provisionData['link']}`"
-            );
+            $daysText = $this->escape($plan->duration_days . ' روز');
+            $dateText = $this->escape($newExpiryDate->format('Y/m/d'));
+            $planName = $this->escape($plan->name);
 
+
+            $linkCode = "`" . $provisionData['link'] . "`";
+
+            $successMessage = "⚡️ *سرویس شما با قدرت تمدید شد!* ⚡️\n\n";
+            $successMessage .= "💎 *پلن:* {$planName}\n";
+            $successMessage .= "⏳ *مدت افزوده شده:* {$daysText}\n";
+            $successMessage .= "📅 *انقضای جدید:* {$dateText}\n\n";
+            $successMessage .= "🔗 *لینک اتصال شما (بدون تغییر):*\n";
+            $successMessage .= "👇 _برای کپی روی لینک زیر ضربه بزنید_\n";
+            $successMessage .= "{$linkCode}";
             $keyboard = Keyboard::make()->inline()->row([
                 Keyboard::inlineButton(['text' => '🛠 سرویس‌های من', 'callback_data' => '/my_services']),
                 Keyboard::inlineButton(['text' => '🏠 منوی اصلی', 'callback_data' => '/start'])
@@ -1794,16 +1804,21 @@ class WebhookController extends Controller
                     'id' => $client['id'],
                     'email' => $uniqueUsername,
                     'total' => $plan->volume_gb * 1073741824,
-                    'expiryTime' => $newExpiryDate->timestamp * 1000,
+                   'expiryTime' => $newExpiryDate->timestamp * 1000,
+
+
                 ];
 
                 if ($linkType === 'subscription' && isset($client['subId'])) {
                     $clientData['subId'] = $client['subId'];
                 }
 
+
+
                 $response = $xui->updateClient($inboundData['id'], $client['id'], $clientData);
                 if ($response && isset($response['success']) && $response['success']) {
 
+                    $xui->resetClientTraffic($inboundData['id'], $uniqueUsername);
                     $originalOrder->update([
                         'expires_at' => $newExpiryDate
                     ]);

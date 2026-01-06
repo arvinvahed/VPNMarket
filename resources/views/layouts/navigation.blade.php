@@ -1,8 +1,8 @@
 @php
-
     use Illuminate\Support\Facades\Storage;
     use App\Models\Setting;
-
+    use Illuminate\Support\Facades\Auth;
+    use Nwidart\Modules\Facades\Module; // اضافه کردن فاساد ماژول
 
     $settings = Setting::all()->pluck('value', 'key');
     $logoPath = $settings->get('site_logo');
@@ -15,19 +15,22 @@
                 <!-- Logo -->
                 <div class="shrink-0 flex items-center">
                     <a href="{{ route('dashboard') }}">
-
                         <img src="{{ $logoPath ? Storage::url($logoPath) : asset('images/default-logo.png') }}"
                              alt="Logo"
-                             class="h-12 w-auto object-contain"> {{-- ارتفاع کمی کاهش یافت --}}
+                             class="h-12 w-auto object-contain">
                     </a>
                 </div>
 
-                <!-- Navigation Links -->
-                <div class="hidden space-x-8 sm:-my-px sm:ms-10 sm:flex">
+                <!-- Navigation Links (دسکتاپ) -->
+                <div class="hidden sm:-my-px sm:ms-3 sm:flex gap-3">
                     <x-nav-link :href="route('dashboard')" :active="request()->routeIs('dashboard')">
                         داشبورد
                     </x-nav-link>
-
+                    @if(Module::isEnabled('Blog'))
+                        <x-nav-link :href="route('blog.index')" :active="request()->routeIs('blog.*')">
+                            وبلاگ
+                        </x-nav-link>
+                    @endif
                 </div>
             </div>
 
@@ -47,10 +50,6 @@
                     </x-slot>
 
                     <x-slot name="content">
-{{--                        <x-dropdown-link :href="route('profile.edit')">--}}
-{{--                            پروفایل--}}
-{{--                        </x-dropdown-link>--}}
-
                         <!-- Authentication -->
                         <form method="POST" action="{{ route('logout') }}">
                             @csrf
@@ -75,12 +74,20 @@
         </div>
     </div>
 
-    <!-- Responsive Navigation Menu -->
+    <!-- Responsive Navigation Menu (موبایل) -->
     <div :class="{'block': open, 'hidden': ! open}" class="hidden sm:hidden">
         <div class="pt-2 pb-3 space-y-1">
             <x-responsive-nav-link :href="route('dashboard')" :active="request()->routeIs('dashboard')">
                 داشبورد
             </x-responsive-nav-link>
+
+            {{-- >>>>> شروع تغییرات: لینک موبایل وبلاگ <<<<< --}}
+            @if(Module::isEnabled('Blog'))
+                <x-responsive-nav-link :href="route('blog.index')" :active="request()->routeIs('blog.*')">
+                    وبلاگ
+                </x-responsive-nav-link>
+            @endif
+            {{-- >>>>> پایان تغییرات <<<<< --}}
         </div>
 
         <!-- Responsive Settings Options -->
@@ -91,10 +98,6 @@
             </div>
 
             <div class="mt-3 space-y-1">
-{{--                <x-responsive-nav-link :href="route('profile.edit')">--}}
-{{--                    پروفایل--}}
-{{--                </x-responsive-nav-link>--}}
-
                 <!-- Authentication -->
                 <form method="POST" action="{{ route('logout') }}">
                     @csrf

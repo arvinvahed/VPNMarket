@@ -4,7 +4,8 @@ namespace App\Filament\Resources;
 
 use App\Filament\Resources\UserResource\Pages;
 use App\Models\User;
-use App\Models\Setting;
+use App\Models\Order;
+use App\Models\Transaction;
 use Modules\TelegramBot\Http\Controllers\WebhookController;
 use Filament\Forms;
 use Filament\Forms\Form;
@@ -15,9 +16,8 @@ use Filament\Notifications\Notification;
 use Filament\Tables\Table;
 use Filament\Tables\Actions\Action;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Log;
-use App\Models\Transaction;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class UserResource extends Resource
 {
@@ -25,7 +25,6 @@ class UserResource extends Resource
 
     protected static ?string $navigationIcon = 'heroicon-o-users';
     protected static ?string $navigationGroup = 'مدیریت کاربران';
-
     protected static ?string $navigationLabel = 'کاربران سایت';
     protected static ?string $pluralModelLabel = 'کاربران سایت';
     protected static ?string $modelLabel = 'کاربر';
@@ -72,11 +71,146 @@ class UserResource extends Resource
                 Tables\Actions\EditAction::make(),
                 Tables\Actions\DeleteAction::make(),
 
+                // ✅ این دکمه در سمت راست هر سطر نمایش داده می‌شود
+                Action::make('manage_subscriptions')
+                    ->label('سرورها') // نام کوتاه‌تر برای دیده شدن بهتر
+                    ->icon('heroicon-o-server')
+                    ->color('primary')
+                    ->modalHeading(fn (User $record) => "اشتراک‌های کاربر: {$record->name}")
+                    ->modalWidth('6xl')
+                    ->modalSubmitActionLabel('ذخیره')
+                    ->visible(fn (): bool => true) // همیشه نمایش داده شود
 
+                    // ✅ بدون هیچ شرط خاصی
+                    ->mountUsing(function (Forms\ComponentContainer $form, User $record) {
+                        $orders = $record->orders()
+                            ->with(['plan'])
+                            ->orderBy('id', 'desc')
+                            ->get()
+                            ->map(function ($order) {
+                                return [
+                                    'id' => $order->id,
+                                    'panel_username' => $order->panel_username,
+                                    'config_details' => $order->config_details ?? '',
+                                    'expires_at' => $order->expires_at,
+                                    'plan_name' => $order->plan->name ?? 'بدون پلن',
+                                    'volume_gb' => $order->plan->volume_gb ?? 0,
+                                    'status' => $order->status,
+                                    'status_persian' => match($order->status) {
+                                        'paid' => '✅ پرداخت شده',
+                                        'pending' => '⏳ در انتظار',
+                                        'failed' => '❌ ناموفق',
+                                        default => '⚪️ نامشخص',
+                                    },
+                                ];
+                            })
+                            ->toArray();
 
+                        $form->fill(['user_orders' => $orders]);
+                    })
 
+                    ->form([
+                        Forms\Components\Section::make('⚠️ نکته امنیتی')
+                            ->schema([
+                                Forms\Components\Placeholder::make('warning')
+                                    ->hiddenLabel()
+                                    ->content('تغییرات فقط در دیتابیس سایت ذخیره می‌شود. برای تغییر در پنل X-UI/Marzban باید دستی اقدام کنید.')
+                                    ->extraAttributes(['class' => 'text-red-600 bg-red-50 p-4 rounded-lg border border-red-200']),
+                            ])
+                            ->columnSpanFull(),
 
-                // اکشن ارسال پیام به تلگرام
+                        Forms\Components\Repeater::make('user_orders')
+                            ->label('لیست سرورهای خریداری‌شده')
+                            ->itemLabel(fn (array $state): ?string =>
+                                ($state['status_persian'] ?? '') . ' | سفارش #' . ($state['id'] ?? '?') .
+                                ' | ' . ($state['plan_name'] ?? 'بدون پلن')
+                            )
+                            ->addable(false)
+                            ->deletable(false)
+                            ->collapsible()
+                            ->collapsed(false)
+                            ->columns(2)
+                            ->schema([
+                                Forms\Components\Grid::make(4)->schema([
+                                    Forms\Components\TextInput::make('id')
+                                        ->label('ID سفارش')
+                                        ->disabled()
+                                        ->columnSpan(1),
+
+                                    Forms\Components\TextInput::make('plan_name')
+                                        ->label('نام پلن')
+                                        ->disabled()
+                                        ->columnSpan(1),
+
+                                    Forms\Components\TextInput::make('status_persian')
+                                        ->label('وضعیت پرداخت')
+                                        ->disabled()
+                                        ->columnSpan(1),
+
+                                    Forms\Components\TextInput::make('volume_gb')
+                                        ->label('حجم مجاز')
+                                        ->disabled()
+                                        ->suffix(' GB')
+                                        ->columnSpan(1),
+                                ]),
+
+                                Forms\Components\TextInput::make('panel_username')
+                                    ->label('نام کاربری پنل')
+                                    ->required()
+                                    ->prefixIcon('heroicon-o-user')
+                                    ->helperText('این نام کاربری در پنل X-UI/Marzban باید وجود داشته باشد')
+                                    ->columnSpan(1),
+
+                                Forms\Components\DateTimePicker::make('expires_at')
+                                    ->label('تاریخ انقضا سرویس')
+                                    ->required()
+                                    ->prefixIcon('heroicon-o-calendar')
+                                    ->displayFormat('Y/m/d H:i')
+                                    ->columnSpan(1),
+
+                                Forms\Components\Section::make('🔗 لینک اتصال (کانفیگ)')
+                                    ->schema([
+                                        Forms\Components\Textarea::make('config_details')
+                                            ->label('لینک اشتراک')
+                                            ->rows(5)
+                                            ->columnSpanFull()
+                                            ->helperText('لینک Vless/Vmess/Trojan را اینجا ویرایش کنید. دقت کنید این لینک باید معتبر باشد!')
+                                            ->required(),
+                                    ])
+                                    ->columnSpanFull(),
+                            ]),
+                    ])
+
+                    // ذخیره تغییرات
+                    ->action(function (User $record, array $data) {
+                        try {
+                            DB::transaction(function () use ($data) {
+                                foreach ($data['user_orders'] as $orderData) {
+                                    Order::where('id', $orderData['id'])->update([
+                                        'panel_username' => $orderData['panel_username'],
+                                        'config_details' => $orderData['config_details'],
+                                        'expires_at' => $orderData['expires_at'],
+                                    ]);
+                                }
+                            });
+
+                            Notification::make()
+                                ->title('موفقیت')
+                                ->body('اطلاعات سرورها با موفقیت بروزرسانی شد.')
+                                ->success()
+                                ->send();
+                        } catch (\Exception $e) {
+                            Notification::make()
+                                ->title('خطا')
+                                ->body('مشکلی در ذخیره اطلاعات رخ داد.')
+                                ->danger()
+                                ->send();
+                        }
+                    }),
+
+                // ====================================================
+                // 💬 اکشن ارسال پیام تلگرام
+                // ====================================================
                 Action::make('send_telegram_message')
                     ->label('پیام تلگرام')
                     ->icon('heroicon-o-chat-bubble-left-right')
@@ -101,12 +235,13 @@ class UserResource extends Resource
                         if ($success) {
                             Notification::make()->title('موفقیت')->body('پیام با موفقیت به تلگرام کاربر ارسال شد.')->success()->send();
                         } else {
-                            Notification::make()->title('خطا در ارسال')->body('ارسال پیام به تلگرام ناموفق بود. (چک کردن لاگ‌ها)')->danger()->send();
+                            Notification::make()->title('خطا در ارسال')->body('ارسال پیام به تلگرام ناموفق بود.')->danger()->send();
                         }
                     }),
 
-
-
+                // ====================================================
+                // 💰 اکشن تنظیم کیف پول
+                // ====================================================
                 Tables\Actions\Action::make('adjust_wallet')
                     ->label('تنظیم کیف پول')
                     ->icon('heroicon-o-currency-dollar')
@@ -158,7 +293,6 @@ class UserResource extends Resource
                         $description = $data['description'];
 
                         DB::transaction(function () use ($record, $amount, $description) {
-                            $oldBalance = $record->balance;
                             $record->increment('balance', $amount);
 
                             Transaction::create([
@@ -196,8 +330,6 @@ class UserResource extends Resource
                     ->modalIcon('heroicon-o-exclamation-triangle')
                     ->modalIconColor('warning')
                     ->modalSubmitActionLabel('بله، اعمال شود'),
-
-
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
@@ -208,9 +340,7 @@ class UserResource extends Resource
 
     public static function getRelations(): array
     {
-        return [
-            //
-        ];
+        return [];
     }
 
     public static function getPages(): array
@@ -219,7 +349,6 @@ class UserResource extends Resource
             'index' => Pages\ListUsers::route('/'),
             'create' => Pages\CreateUser::route('/create'),
             'edit' => Pages\EditUser::route('/{record}/edit'),
-
         ];
     }
 }
