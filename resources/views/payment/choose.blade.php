@@ -17,24 +17,28 @@
 
                 <div class="mt-6 grid grid-cols-1 md:grid-cols-2 gap-6">
                     <!-- گزینه کارت به کارت -->
-                    <form method="POST" action="{{ route('payment.card.process') }}">
+                    <form method="POST" action="{{ route('payment.card.process', $order->id) }}">
                         @csrf
-                        <input type="hidden" name="plan_id" value="{{ $plan->id }}">
                         <button type="submit" class="w-full text-center p-6 border-2 rounded-lg hover:border-blue-500 transition">
                             <h4 class="font-bold text-gray-900 dark:text-gray-100">پرداخت با کارت به کارت</h4>
-                            <p class="text-sm text-gray-600 dark:text-gray-400 mt-2">ساده و سریع، مناسب برای پرداخت ریالی.</p>
+                            <p class="text-sm text-gray-600 dark:text-gray-400 mt-2">
+                                ساده و سریع، مناسب برای پرداخت ریالی.
+                            </p>
                         </button>
                     </form>
 
+
                     <!-- گزینه ارز دیجیتال -->
-                    <form method="POST" action="{{ route('payment.crypto.process') }}">
+                    <form method="POST" action="{{ route('payment.crypto.process', $order->id) }}">
                         @csrf
-                        <input type="hidden" name="plan_id" value="{{ $plan->id }}">
                         <button type="submit" class="w-full text-center p-6 border-2 rounded-lg hover:border-green-500 transition">
                             <h4 class="font-bold text-gray-900 dark:text-gray-100">پرداخت با ارز دیجیتال (USDT)</h4>
-                            <p class="text-sm text-gray-600 dark:text-gray-400 mt-2">پرداخت آنی و خودکار.</p>
+                            <p class="text-sm text-gray-600 dark:text-gray-400 mt-2">
+                                پرداخت آنی و خودکار.
+                            </p>
                         </button>
                     </form>
+
                 </div>
             </div>
         </div>

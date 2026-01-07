@@ -267,7 +267,6 @@ class WebhookController extends Controller
 
     protected function processUsername($user, $planId, $username)
     {
-
         $username = trim($username);
 
 
@@ -305,7 +304,6 @@ class WebhookController extends Controller
         }
 
 
-        $user->update(['bot_state' => null]);
         $this->startPurchaseProcess($user, $planId, $username);
     }
 
@@ -371,6 +369,44 @@ class WebhookController extends Controller
 
         if (!Str::startsWith($data, ['/deposit_custom', '/support_new', 'reply_ticket_', 'enter_discount_'])) {
             $user->update(['bot_state' => null]);
+        }
+
+        if (Str::startsWith($data, 'select_loc_')) {
+            $parts = explode('_', $data);
+
+            if (count($parts) >= 5) {
+                $locationId = $parts[2];
+                $planId = $parts[4];
+
+
+                $location = \Modules\MultiServer\Models\Location::find($locationId);
+                if ($location) {
+                    $totalCapacity = $location->servers()->where('is_active', true)->sum('capacity');
+                    $totalUsed = $location->servers()->where('is_active', true)->sum('current_users');
+
+
+                    if ($totalUsed >= $totalCapacity) {
+                        $settings = \App\Models\Setting::all()->pluck('value', 'key');
+
+                        $msg = $settings->get('ms_full_location_message') ?? "❌ ظرفیت تکمیل است.";
+
+
+                        Telegram::answerCallbackQuery([
+                            'callback_query_id' => $callbackQuery->getId(),
+                            'text' => $msg,
+                            'show_alert' => true
+                        ]);
+                        return;
+                    }
+                }
+
+                $user->update([
+                    'bot_state' => "selected_loc:{$locationId}|plan:{$planId}"
+                ]);
+
+                $this->promptForUsername($user, $planId, $messageId);
+                return;
+            }
         }
 
         if (Str::startsWith($data, 'buy_plan_')) {
@@ -495,32 +531,64 @@ class WebhookController extends Controller
         }
     }
 
-    // نمایش لیست کشورها
+
     protected function promptForLocation($user, $planId, $messageId)
     {
-        $locations = \Modules\MultiServer\Models\Location::where('is_active', true)->get();
 
-        if ($locations->isEmpty()) {
-            // اگر هیچ لوکیشنی تعریف نشده بود، روال عادی رو طی کن
-            $this->promptForUsername($user, $planId, $messageId);
-            return;
-        }
+        $settings = \App\Models\Setting::all()->pluck('value', 'key');
+        $showCapacity = filter_var($settings->get('ms_show_capacity', true), FILTER_VALIDATE_BOOLEAN);
+        $hideFull = filter_var($settings->get('ms_hide_full_locations', false), FILTER_VALIDATE_BOOLEAN);
+
+        $locations = \Modules\MultiServer\Models\Location::where('is_active', true)->with('servers')->get();
 
         $keyboard = Keyboard::make()->inline();
+        $hasAvailableLocation = false;
 
         foreach ($locations as $loc) {
+
+            $totalCapacity = $loc->servers->where('is_active', true)->sum('capacity');
+            $totalUsed = $loc->servers->where('is_active', true)->sum('current_users');
+            $remained = max(0, $totalCapacity - $totalUsed);
+            $isFull = $remained <= 0;
+
+
+            if ($isFull && $hideFull) {
+                continue;
+            }
+
+            $hasAvailableLocation = true;
             $flag = $loc->flag ?? '🏳️';
+
+
+            $btnText = "$flag {$loc->name}";
+
+            if ($isFull) {
+                $btnText .= " (تکمیل 🔒)";
+            } elseif ($showCapacity) {
+                $btnText .= " ({$remained} عدد)";
+            }
+
             $keyboard->row([
                 Keyboard::inlineButton([
-                    'text' => "$flag {$loc->name}",
+                    'text' => $btnText,
+                    // حتی اگر پر باشد، دکمه کار می‌کند تا پیام سفارشی را نشان دهد
                     'callback_data' => "select_loc_{$loc->id}_plan_{$planId}"
                 ])
             ]);
         }
 
+        if (!$hasAvailableLocation) {
+            Telegram::sendMessage([
+                'chat_id' => $user->telegram_chat_id,
+                'text' => $this->escape("❌ متأسفانه ظرفیت تمام سرورها تکمیل شده است."),
+                'parse_mode' => 'MarkdownV2'
+            ]);
+            return;
+        }
+
         $keyboard->row([Keyboard::inlineButton(['text' => '❌ انصراف', 'callback_data' => '/cancel_action'])]);
 
-        $this->sendOrEditMessage($user->telegram_chat_id, "🌍 *انتخاب لوکیشن*\n\nلطفاً کشور مورد نظر خود را برای اتصال انتخاب کنید:", $keyboard, $messageId);
+        $this->sendOrEditMessage($user->telegram_chat_id, "🌍 *انتخاب لوکیشن*\n\nلطفاً کشور مورد نظر خود را انتخاب کنید:", $keyboard, $messageId);
     }
 
     protected function handlePhotoMessage($update)
@@ -606,7 +674,6 @@ class WebhookController extends Controller
     protected function startPurchaseProcess($user, $planId, $username, $messageId = null)
     {
         $plan = Plan::find($planId);
-
         if (!$plan) {
             $this->sendOrEditMainMenu($user->telegram_chat_id, "❌ پلن مورد نظر یافت نشد.", $messageId);
             return;
@@ -617,7 +684,7 @@ class WebhookController extends Controller
 
         if ($user->bot_state && Str::contains($user->bot_state, 'selected_loc:')) {
             $stateParts = explode('|', $user->bot_state);
-            $locPart = $stateParts[0];
+            $locPart = $stateParts[0]; // selected_loc:5
             $locationId = Str::after($locPart, ':');
 
 
@@ -629,6 +696,15 @@ class WebhookController extends Controller
 
             if ($bestServer) {
                 $serverId = $bestServer->id;
+            } else {
+
+                $user->update(['bot_state' => null]);
+                Telegram::sendMessage([
+                    'chat_id' => $user->telegram_chat_id,
+                    'text' => $this->escape("❌ متأسفانه ظرفیت سرورهای این لوکیشن تکمیل شده است."),
+                    'parse_mode' => 'MarkdownV2'
+                ]);
+                return;
             }
         }
 
@@ -1391,7 +1467,6 @@ class WebhookController extends Controller
                 $isMultiServer = true;
                 $panelType = 'xui';
 
-
                 $xuiHost = $targetServer->full_host;
                 $xuiUser = $targetServer->username;
                 $xuiPass = $targetServer->password;
@@ -1399,10 +1474,12 @@ class WebhookController extends Controller
 
 
                 $targetServer->increment('current_users');
+                $targetServer->save();
+                // -----------------------------------------------
 
                 Log::info("🚀 Provisioning on MultiServer Location: {$targetServer->name}", [
                     'server_id' => $targetServer->id,
-                    'host' => $xuiHost
+                    'current_users' => $targetServer->current_users
                 ]);
             }
         }
@@ -1591,8 +1668,10 @@ class WebhookController extends Controller
         } catch (\Exception $e) {
             Log::error("Failed to provision account for Order {$order->id}: " . $e->getMessage());
 
+
             if (isset($targetServer)) {
                 $targetServer->decrement('current_users');
+                $targetServer->save();
             }
             return null;
         }
