@@ -4,17 +4,23 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Log;
+
 class Order extends Model
 {
-
     protected $fillable = [
-        'user_id', 'plan_id', 'status', 'expires_at',
-        'payment_method', 'card_payment_receipt', 'nowpayments_payment_id',
+        'user_id',
+        'plan_id',
+        'server_id',
+        'status',
+        'expires_at',
+        'payment_method',
+        'card_payment_receipt',
+        'nowpayments_payment_id',
         'config_details',
         'amount',
         'source',
         'panel_username',
-
+        'reserved_slot',
     ];
 
     public function user()
@@ -27,9 +33,19 @@ class Order extends Model
         return $this->belongsTo(Plan::class);
     }
 
-    public function store(Plan $plan)
+
+    public function server()
     {
 
+        if (class_exists('Modules\MultiServer\Models\Server')) {
+            return $this->belongsTo(\Modules\MultiServer\Models\Server::class, 'server_id');
+        }
+
+        return $this->belongsTo(Plan::class, 'plan_id')->whereNull('id');
+    }
+
+    public function store(Plan $plan)
+    {
         return view('payment.choose', ['plan' => $plan]);
     }
 

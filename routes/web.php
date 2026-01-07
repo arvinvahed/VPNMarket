@@ -113,7 +113,8 @@ Route::middleware(['auth'])->group(function () {
         ->name('order.applyDiscount');
     Route::post('/payment/card/{order}/submit', [OrderController::class, 'submitCardReceipt'])->name('payment.card.submit');
     Route::post('/payment/card/{order}', [OrderController::class, 'processCardPayment'])->name('payment.card.process');
-
+    Route::get('/order/{plan}/select-server', [OrderController::class, 'selectServer'])->name('order.select-server');
+    Route::post('/order/{plan}/select-server', [OrderController::class, 'storeWithServer'])->name('order.store-with-server');
     Route::post('/payment/crypto/{order}', [OrderController::class, 'processCryptoPayment'])->name('payment.crypto.process');
     Route::post('/payment/wallet/{order}', [OrderController::class, 'processWalletPayment'])->name('payment.wallet.process');
 });

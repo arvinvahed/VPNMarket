@@ -23,20 +23,30 @@ class OrderController extends Controller
     /**
      * Create a new pending order for a specific plan.
      */
+
+
     public function store(Plan $plan)
     {
+
+        if (class_exists('Modules\MultiServer\Models\Location')) {
+
+            return redirect()->route('order.select-server', $plan->id);
+        }
+
+        // 2. حالت عادی (تک سرور)
         $order = Auth::user()->orders()->create([
             'plan_id' => $plan->id,
             'status' => 'pending',
             'source' => 'web',
             'discount_amount' => 0,
             'discount_code_id' => null,
+            'amount' => $plan->price,
         ]);
 
         Auth::user()->notifications()->create([
             'type' => 'new_order_created',
-            'title' => 'سفارش جدید شما ثبت شد!',
-            'message' => "سفارش #{$order->id} برای پلن {$plan->name} با موفقیت ثبت شد و در انتظار پرداخت است.",
+            'title' => 'سفارش جدید ثبت شد',
+            'message' => "سفارش شما برای پلن {$plan->name} ایجاد شد.",
             'link' => route('order.show', $order->id),
         ]);
 
@@ -249,6 +259,63 @@ class OrderController extends Controller
     /**
      * Handle the submission of the payment receipt file.
      */
+
+
+    // نمایش صفحه انتخاب سرور (مخصوص ماژول MultiServer)
+    public function selectServer(Plan $plan)
+    {
+        if (!class_exists('Modules\MultiServer\Models\Location')) {
+            abort(404);
+        }
+
+        // دریافت لوکیشن‌ها و سرورهایی که فعال هستند و ظرفیت دارند
+        $locations = \Modules\MultiServer\Models\Location::where('is_active', true)
+            ->with(['servers' => function ($query) {
+                $query->where('is_active', true)
+                    ->whereRaw('current_users < capacity'); // فقط سرورهای دارای ظرفیت
+            }])
+            ->whereHas('servers', function ($query) {
+                $query->where('is_active', true)
+                    ->whereRaw('current_users < capacity');
+            })
+            ->get();
+
+        return view('payment.select-server', compact('plan', 'locations'));
+    }
+
+    // ثبت سفارش با سرور انتخاب شده
+    public function storeWithServer(Request $request, Plan $plan)
+    {
+        $request->validate([
+            'server_id' => 'required|exists:ms_servers,id'
+        ]);
+
+        // چک کردن ظرفیت سرور
+        $server = \Modules\MultiServer\Models\Server::find($request->server_id);
+        if ($server->current_users >= $server->capacity) {
+            return redirect()->back()->with('error', 'متأسفانه ظرفیت این سرور تکمیل شده است.');
+        }
+
+        // ساخت سفارش
+        $order = Auth::user()->orders()->create([
+            'plan_id' => $plan->id,
+            'server_id' => $request->server_id,
+            'status' => 'pending',
+            'source' => 'web',
+            'discount_amount' => 0,
+            'discount_code_id' => null,
+            'amount' => $plan->price,
+        ]);
+
+        Auth::user()->notifications()->create([
+            'type' => 'new_order_created',
+            'title' => 'سفارش جدید ثبت شد',
+            'message' => "سفارش شما برای پلن {$plan->name} در سرور {$server->name} ایجاد شد.",
+            'link' => route('order.show', $order->id),
+        ]);
+
+        return redirect()->route('order.show', $order->id);
+    }
 
 
     public function showCardPaymentPage(Order $order)
