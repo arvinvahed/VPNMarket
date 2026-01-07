@@ -68,25 +68,21 @@ class OrderController extends Controller
             abort(403);
         }
 
-        $order->update(['payment_method' => 'card']);
-        $settings = Setting::all()->pluck('value', 'key');
 
-        // محاسبه مبلغ نهایی با احتساب تخفیف
-        $originalAmount = $order->plan->price ?? $order->amount;
+        $order->update(['payment_method' => 'card']);
+
+
+        $originalAmount = $order->plan ? $order->plan->price : $order->amount;
         $discountAmount = session('discount_amount', 0);
         $finalAmount = $originalAmount - $discountAmount;
 
-        // ذخیره تخفیف و مبلغ نهایی در دیتابیس
         $order->update([
             'discount_amount' => $discountAmount,
             'amount' => $finalAmount
         ]);
 
-        return view('payment.card-receipt', [
-            'order' => $order,
-            'settings' => $settings,
-            'finalAmount' => $finalAmount,
-        ]);
+
+        return redirect()->route('payment.card.show', $order->id);
     }
 
     /**
@@ -253,6 +249,32 @@ class OrderController extends Controller
     /**
      * Handle the submission of the payment receipt file.
      */
+
+
+    public function showCardPaymentPage(Order $order)
+    {
+        if (Auth::id() !== $order->user_id) {
+            abort(403);
+        }
+
+
+        if ($order->status === 'paid') {
+            return redirect()->route('dashboard')->with('status', 'این سفارش قبلاً پرداخت شده است.');
+        }
+
+
+        $settings = Setting::all()->pluck('value', 'key');
+
+
+        $finalAmount = $order->amount;
+
+        return view('payment.card-receipt', [
+            'order' => $order,
+            'settings' => $settings,
+            'finalAmount' => $finalAmount,
+        ]);
+    }
+
     public function submitCardReceipt(Request $request, Order $order)
     {
         $request->validate(['receipt' => 'required|image|mimes:jpeg,png,jpg,gif|max:2048']);

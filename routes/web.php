@@ -107,6 +107,8 @@ Route::middleware(['auth'])->group(function () {
     Route::post('/order/{plan}', [OrderController::class, 'store'])->name('order.store');
     Route::get('/order/{order}', [OrderController::class, 'show'])->name('order.show');
     Route::post('/order/{order}/renew', [OrderController::class, 'renew'])->name('order.renew');
+    Route::get('/payment/card/{order}', [OrderController::class, 'showCardPaymentPage'])->name('payment.card.show');
+
     Route::post('/order/{order}/apply-discount', [OrderController::class, 'applyDiscountCode'])
         ->name('order.applyDiscount');
     Route::post('/payment/card/{order}/submit', [OrderController::class, 'submitCardReceipt'])->name('payment.card.submit');
