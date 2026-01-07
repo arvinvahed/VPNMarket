@@ -1867,7 +1867,7 @@ class WebhookController extends Controller
             $planName = $this->escape($plan->name);
 
 
-            $linkCode = "`" . $provisionData['link'] . "`";
+            $linkCode = $provisionData['link'];
 
             $successMessage = "⚡️ *سرویس شما با قدرت تمدید شد!* ⚡️\n\n";
             $successMessage .= "💎 *پلن:* {$planName}\n";
