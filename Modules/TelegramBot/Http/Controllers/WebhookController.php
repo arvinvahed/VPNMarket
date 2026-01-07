@@ -413,8 +413,7 @@ class WebhookController extends Controller
             $planId = Str::after($data, 'buy_plan_');
 
 
-            if (\Nwidart\Modules\Facades\Module::isEnabled('MultiServer')) {
-
+            if (class_exists('Modules\MultiServer\Models\Location')) {
                 $this->promptForLocation($user, $planId, $messageId);
                 return;
             }
@@ -682,11 +681,10 @@ class WebhookController extends Controller
         $serverId = null;
 
 
-        if ($user->bot_state && Str::contains($user->bot_state, 'selected_loc:')) {
+        if (class_exists('Modules\MultiServer\Models\Server') && $user->bot_state && Str::contains($user->bot_state, 'selected_loc:')) {
             $stateParts = explode('|', $user->bot_state);
-            $locPart = $stateParts[0]; // selected_loc:5
+            $locPart = $stateParts[0];
             $locationId = Str::after($locPart, ':');
-
 
             $bestServer = \Modules\MultiServer\Models\Server::where('location_id', $locationId)
                 ->where('is_active', true)
@@ -697,7 +695,6 @@ class WebhookController extends Controller
             if ($bestServer) {
                 $serverId = $bestServer->id;
             } else {
-
                 $user->update(['bot_state' => null]);
                 Telegram::sendMessage([
                     'chat_id' => $user->telegram_chat_id,
@@ -719,9 +716,7 @@ class WebhookController extends Controller
             'panel_username' => $username
         ]);
 
-
         $user->update(['bot_state' => null]);
-
         $this->showInvoice($user, $order, $messageId);
     }
 
@@ -1446,10 +1441,8 @@ class WebhookController extends Controller
         $uniqueUsername = $order->panel_username ?? "user-{$order->user_id}-order-{$order->id}";
         $configData = ['link' => null, 'username' => null];
 
-
         $isMultiServer = false;
         $panelType = $settings->get('panel_type') ?? 'marzban';
-
 
         $xuiHost = $settings->get('xui_host');
         $xuiUser = $settings->get('xui_user');
@@ -1459,11 +1452,11 @@ class WebhookController extends Controller
         // ============================================================
         // 1. بررسی سیستم مولتی سرور (MultiServer Check)
         // ============================================================
-        if (\Nwidart\Modules\Facades\Module::isEnabled('MultiServer') && $order->server_id) {
+        if (class_exists('Modules\MultiServer\Models\Server') && $order->server_id) {
             $targetServer = \Modules\MultiServer\Models\Server::find($order->server_id);
 
-            if ($targetServer && $targetServer->is_active) {
 
+            if ($targetServer && $targetServer->is_active) {
                 $isMultiServer = true;
                 $panelType = 'xui';
 
@@ -1471,7 +1464,6 @@ class WebhookController extends Controller
                 $xuiUser = $targetServer->username;
                 $xuiPass = $targetServer->password;
                 $inboundId = $targetServer->inbound_id;
-
 
                 $targetServer->increment('current_users');
                 $targetServer->save();
