@@ -12,9 +12,13 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('orders', function (Blueprint $table) {
-            $table->boolean('reserved_slot')->default(false)->after('server_id');
-
+            if (Schema::hasColumn('orders', 'server_id')) {
+                $table->boolean('reserved_slot')->default(false)->after('server_id');
+            } else {
+                $table->boolean('reserved_slot')->default(false);
+            }
         });
+
     }
 
     /**
