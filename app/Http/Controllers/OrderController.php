@@ -12,6 +12,7 @@ use App\Models\Setting;
 use App\Models\Transaction;
 use App\Services\MarzbanService;
 use App\Services\XUIService;
+use App\Services\PasargadService;
 use App\Models\Notification;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;

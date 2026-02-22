@@ -68,6 +68,42 @@ class PlanResource extends Resource
                     ->label('فعال')
                     ->default(true),
 
+                Forms\Components\Select::make('pasargad_group_id')
+                    ->label('گروه پاسارگاد')
+                    ->options(function () {
+                        try {
+                            $settings = \App\Models\Setting::pluck('value', 'key');
+                            $host = $settings['pasargad_host'] ?? null;
+                            $user = $settings['pasargad_sudo_username'] ?? null;
+                            $pass = $settings['pasargad_sudo_password'] ?? null;
+                            
+                            if (!$host || !$user || !$pass) {
+                                return ['' => '⚠️ تنظیمات پاسارگاد ناقص'];
+                            }
+                            
+                            $service = new \App\Services\PasargadService($host, $user, $pass);
+                            $groups = $service->getGroups();
+                            
+                            if (empty($groups)) {
+                                return ['' => '⚠️ گروهی یافت نشد'];
+                            }
+                            
+                            $options = ['' => '🔄 از تنظیمات کلی'];
+                            foreach ($groups as $group) {
+                                $id = $group['id'] ?? null;
+                                $name = $group['name'] ?? 'بدون نام';
+                                if ($id !== null) {
+                                    $options[$id] = "{$name} (ID: {$id})";
+                                }
+                            }
+                            return $options;
+                        } catch (\Exception $e) {
+                            return ['' => '⚠️ خطا در دریافت گروه‌ها'];
+                        }
+                    })
+                    ->helperText('خالی = استفاده از تنظیمات کلی')
+                    ->searchable()
+                    ->native(false),
 
             ]);
     }

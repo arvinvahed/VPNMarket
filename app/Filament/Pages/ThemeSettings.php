@@ -169,7 +169,8 @@ class ThemeSettings extends Page implements HasForms
                                 ->label('نوع پنل')
                                 ->options([
                                     'marzban' => 'مرزبان',
-                                    'xui' => 'تنظیمات پنل سنایی / X-UI / TX-UI'
+                                    'xui' => 'تنظیمات پنل سنایی / X-UI / TX-UI',
+                                    'pasargad' => '🦅 پاسارگاد (PasarGuard)'
                                 ])
                                 ->live()
                                 ->required(),
@@ -200,6 +201,105 @@ class ThemeSettings extends Page implements HasForms
                                     TextInput::make('marzban_sudo_username')->label('نام کاربری ادمین')->required(),
                                     TextInput::make('marzban_sudo_password')->label('رمز عبور ادمین')->password()->required(),
                                     TextInput::make('marzban_node_hostname')->label('آدرس دامنه/سرور برای کانفیگ')
+                                ]),
+
+                            Section::make('🦅 تنظیمات پنل پاسارگاد')
+                                ->description('اطلاعات اتصال به پنل PasarGuard')
+                                ->icon('heroicon-o-server')
+                                ->columns(2)
+                                ->visible(fn (Get $get) => $get('panel_type') === 'pasargad')
+                                ->schema([
+                                    TextInput::make('pasargad_host')
+                                        ->label('آدرس پنل پاسارگاد')
+                                        ->placeholder('https://panel.example.com')
+                                        ->required()
+                                        ->columnSpan(2),
+                                    TextInput::make('pasargad_sudo_username')
+                                        ->label('نام کاربری ادمین')
+                                        ->required(),
+                                    TextInput::make('pasargad_sudo_password')
+                                        ->label('رمز عبور ادمین')
+                                        ->password()
+                                        ->required(),
+                                    TextInput::make('pasargad_node_hostname')
+                                        ->label('آدرس نود (اختیاری)')
+                                        ->placeholder('node.example.com')
+                                        ->helperText('اگر آدرس سابسکریپشن متفاوت است اینجا وارد کنید')
+                                        ->columnSpan(2),
+                                    Select::make('pasargad_trial_group_id')
+                                        ->label('گروه اکانت تست')
+                                        ->options(function () {
+                                            try {
+                                                $host = Setting::where('key', 'pasargad_host')->first()?->value;
+                                                $user = Setting::where('key', 'pasargad_sudo_username')->first()?->value;
+                                                $pass = Setting::where('key', 'pasargad_sudo_password')->first()?->value;
+                                                
+                                                if (!$host || !$user || !$pass) {
+                                                    return ['' => '⚠️ ابتدا تنظیمات پاسارگاد را ذخیره کنید'];
+                                                }
+                                                
+                                                $service = new \App\Services\PasargadService($host, $user, $pass);
+                                                $groups = $service->getGroups();
+                                                
+                                                if (empty($groups)) {
+                                                    return ['' => '⚠️ گروهی یافت نشد'];
+                                                }
+                                                
+                                                $options = [];
+                                                foreach ($groups as $group) {
+                                                    $id = $group['id'] ?? null;
+                                                    $name = $group['name'] ?? 'بدون نام';
+                                                    if ($id !== null) {
+                                                        $options[$id] = "{$name} (ID: {$id})";
+                                                    }
+                                                }
+                                                return $options;
+                                            } catch (\Exception $e) {
+                                                Log::error('Failed to fetch Pasargad groups: ' . $e->getMessage());
+                                                return ['' => '⚠️ خطا در دریافت گروه‌ها'];
+                                            }
+                                        })
+                                        ->helperText('اکانت‌های تست در این گروه ساخته می‌شوند')
+                                        ->columnSpan(2)
+                                        ->searchable()
+                                        ->native(false),
+                                    Select::make('pasargad_paid_group_id')
+                                        ->label('گروه سرویس‌های پولی')
+                                        ->options(function () {
+                                            try {
+                                                $host = Setting::where('key', 'pasargad_host')->first()?->value;
+                                                $user = Setting::where('key', 'pasargad_sudo_username')->first()?->value;
+                                                $pass = Setting::where('key', 'pasargad_sudo_password')->first()?->value;
+                                                
+                                                if (!$host || !$user || !$pass) {
+                                                    return ['' => '⚠️ ابتدا تنظیمات پاسارگاد را ذخیره کنید'];
+                                                }
+                                                
+                                                $service = new \App\Services\PasargadService($host, $user, $pass);
+                                                $groups = $service->getGroups();
+                                                
+                                                if (empty($groups)) {
+                                                    return ['' => '⚠️ گروهی یافت نشد'];
+                                                }
+                                                
+                                                $options = [];
+                                                foreach ($groups as $group) {
+                                                    $id = $group['id'] ?? null;
+                                                    $name = $group['name'] ?? 'بدون نام';
+                                                    if ($id !== null) {
+                                                        $options[$id] = "{$name} (ID: {$id})";
+                                                    }
+                                                }
+                                                return $options;
+                                            } catch (\Exception $e) {
+                                                Log::error('Failed to fetch Pasargad groups: ' . $e->getMessage());
+                                                return ['' => '⚠️ خطا در دریافت گروه‌ها'];
+                                            }
+                                        })
+                                        ->helperText('سرویس‌های خریداری شده در این گروه ساخته می‌شوند')
+                                        ->columnSpan(2)
+                                        ->searchable()
+                                        ->native(false),
                                 ]),
 
                             // 🔥 فقط وقتی نمایش داده می‌شود که X-UI انتخاب شده AND مولتی لوکیشن غیرفعال باشد

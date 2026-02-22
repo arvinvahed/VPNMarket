@@ -24,7 +24,6 @@ class Setting extends Model
     ];
 
     protected $casts = [
-        'value' => 'array',
         'test_account_enabled' => 'boolean',
         'test_account_volume_gb' => 'integer',
         'test_account_days' => 'integer',

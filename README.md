@@ -1,12 +1,12 @@
 <p align="center">
   <!-- لوگوی پروژه شما از پوشه github/github/logo.png -->
-  <img src="https://raw.githubusercontent.com/arvinvahed/VPNMarket/main/github/github/logo.png" width="350" alt="VPNMarket Logo">
+  <img src="https://raw.githubusercontent.com/tawanamohammadi/VPNMarket/main/github/github/logo.png" width="350" alt="VPNMarket Logo">
 </p>
 
-<h1 align="center">VPNMarket - پنل مدیریت جامع و هوشمند مرزبان و X-UI</h1>
+<h1 align="center">VPNMarket - پنل مدیریت جامع و هوشمند مرزبان، X-UI و پاسارگاد</h1>
 
 <p align="center">
-  <strong>یک ابزار قدرتمند، رایگان و متن-باز برای مدیریت، فروش و کسب درآمد از سرویس‌های VPN مبتنی بر پنل‌های Marzban و Sanaei (X-UI)</strong>
+  <strong>یک ابزار قدرتمند، رایگان و متن-باز برای مدیریت، فروش و کسب درآمد از سرویس‌های VPN مبتنی بر پنل‌های Marzban، Sanaei (X-UI) و Pasargad (PasarGuard)</strong>
 </p>
 
 <p align="center">
@@ -22,20 +22,27 @@
 ## ✨ نمایی از محیط پنل
 
 <p align="center">
-   <img src="https://raw.githubusercontent.com/arvinvahed/VPNMarket/main/github/github/panel1.PNG" width="45%" alt="داشبورد اصلی">
-  <img src="https://raw.githubusercontent.com/arvinvahed/VPNMarket/main/github/github/panel2.PNG" width="45%" alt="مدیریت کاربران">
+   <img src="https://raw.githubusercontent.com/tawanamohammadi/VPNMarket/main/github/github/panel1.PNG" width="45%" alt="داشبورد اصلی">
+  <img src="https://raw.githubusercontent.com/tawanamohammadi/VPNMarket/main/github/github/panel2.PNG" width="45%" alt="مدیریت کاربران">
   <br>
-  <img src="https://raw.githubusercontent.com/arvinvahed/VPNMarket/main/github/github/panel3.PNG" width="90%" alt="تنظیمات سرور">
+  <img src="https://raw.githubusercontent.com/tawanamohammadi/VPNMarket/main/github/github/panel3.PNG" width="90%" alt="تنظیمات سرور">
 </p>
 
 ## 🚀 ویژگی‌های کلیدی که عاشقشان خواهید شد
 
-- 🌐 **پشتیبانی همزمان از Marzban و X-UI (Sanaei):** به سادگی چندین سرور از هر دو پنل را به سیستم متصل و به صورت یکپارچه مدیریت کنید.
+- 🌐 **پشتیبانی همزمان از Marzban، X-UI و Pasargad:** به سادگی چندین سرور از هر سه پنل را به سیستم متصل و به صورت یکپارچه مدیریت کنید.
+
+- 🦅 **پشتیبانی کامل از پنل پاسارگاد (PasarGuard):**
+  - ساخت خودکار کاربر در پنل پاسارگاد
+  - تمدید سرویس با ریست ترافیک
+  - دریافت لینک سابسکریپشن
+  - پشتیبانی از group_ids
 
 - 🤖 **ربات تلگرام هوشمند:**
   - فروش خودکار اشتراک‌ها و تحویل آنی به کاربر.
   - ارائه اطلاعات حساب و لینک‌های اتصال.
   - پشتیبانی از درگاه‌های پرداخت مختلف.
+  - اکانت تست رایگان
 
 - 📱 **اپلیکیشن اختصاصی اندروید:** کاربران شما می‌توانند به راحتی اشتراک خود را مدیریت کرده و به سرورها متصل شوند.
 
@@ -72,7 +79,7 @@
 ## ⚙️ راهنمای نصب (جادوی تک-دستوری)
 
 ### پیش‌نیازها
-*   یک سرور تمیز با سیستم‌عامل **Ubuntu 22.04**.
+*   یک سرور تمیز با سیستم‌عامل **Ubuntu 22.04** یا **Ubuntu 24.04**.
 *   یک دامنه یا زیردامنه که به IP سرور شما متصل شده باشد.
 *   دسترسی SSH به سرور با کاربر `root` یا دسترسی `sudo`.
 
@@ -80,8 +87,52 @@
 وارد سرور خود شوید و دستور زیر را اجرا کنید. اسکریپت ما بقیه کارها را به صورت خودکار انجام می‌دهد!
 
 ```bash
-wget -O install.sh https://raw.githubusercontent.com/arvinvahed/VPNMarket/main/install.sh && sudo bash install.sh
+wget -O install.sh https://raw.githubusercontent.com/tawanamohammadi/VPNMarket/main/install.sh && sudo bash install.sh
 ```
+
+### نصب دستی
+اگر می‌خواهید نصب دستی انجام دهید:
+
+```bash
+# 1. نصب پیش‌نیازها
+sudo apt update && sudo apt install -y git curl nginx mysql-server php8.2 php8.2-fpm php8.2-mysql php8.2-mbstring php8.2-xml php8.2-curl php8.2-zip composer
+
+# 2. کلون کردن پروژه
+cd /var/www
+sudo git clone https://github.com/tawanamohammadi/VPNMarket.git vpnmarket
+cd vpnmarket
+
+# 3. نصب وابستگی‌ها
+sudo composer install --no-dev --optimize-autoloader
+
+# 4. تنظیم محیط
+sudo cp .env.example .env
+sudo php artisan key:generate
+
+# 5. ویرایش .env و تنظیم دیتابیس
+sudo nano .env
+
+# 6. اجرای مایگریشن‌ها
+sudo php artisan migrate --seed
+
+# 7. بهینه‌سازی
+sudo php artisan optimize
+sudo php artisan filament:optimize
+```
+
+## 🦅 تنظیم پنل پاسارگاد
+
+پس از نصب، برای اتصال به پنل پاسارگاد:
+
+1. وارد پنل ادمین شوید: `https://your-domain.com/admin`
+2. به **تنظیمات** > **تنظیمات پنل V2Ray** بروید
+3. نوع پنل را روی **🦅 پاسارگاد (PasarGuard)** قرار دهید
+4. اطلاعات زیر را وارد کنید:
+   - **آدرس پنل:** `https://your-pasargad-panel.com`
+   - **نام کاربری ادمین:** نام کاربری ادمین پنل
+   - **رمز عبور ادمین:** رمز عبور ادمین پنل
+   - **آدرس نود (اختیاری):** اگر آدرس سابسکریپشن متفاوت است
+5. ذخیره کنید
 
 ## 🔄 نحوه آپدیت پروژه
 

@@ -8,6 +8,7 @@ use App\Models\User;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 
+use App\Http\Controllers\WebApp\WebAppController;
 use App\Http\Controllers\WebhookController as NowPaymentsWebhookController;
 use Modules\TelegramBot\Http\Controllers\WebhookController as TelegramWebhookController;
 

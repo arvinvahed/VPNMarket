@@ -94,6 +94,8 @@ class OrderResource extends Resource
                             }
 
                             // --- 2. تمدید یا خرید سرویس ---
+                            Log::info("Approving order {$order->id} for user {$user->id}");
+
                             $isRenewal = (bool)$order->renews_order_id;
                             $originalOrder = $isRenewal ? Order::find($order->renews_order_id) : null;
 
@@ -277,11 +279,20 @@ class OrderResource extends Resource
                                     $success = true;
                                 }
                             } catch (\Exception $e) {
+                                Log::error("Provisioning Exception for order {$order->id}: " . $e->getMessage() . "\nStack Trace:\n" . $e->getTraceAsString());
                                 Notification::make()->title('خطا')->body($e->getMessage())->danger()->send();
                                 return;
                             }
 
-                            // --- پایان ---
+                                    // --- پایان ---
+                                    if ($success) {
+                                        Log::info("Service provisioned successfully for order {$order->id}");
+                                        // ادامه لاجیک...
+                                    } else {
+                                        Log::error("Provisioning failed for order {$order->id}");
+                                        Notification::make()->title('خطا در ایجاد سرویس')->body('عملیات ناموفق بود.')->danger()->send();
+                                        return;
+                                    }
                             if ($success) {
                                 $dataToUpdate = [
                                     'config_details' => $finalConfig,
@@ -327,27 +338,34 @@ class OrderResource extends Resource
                                         $planModel = $displayOrder->plan;
 
 
-                                        // تابع escape کمکی
+                                        // تابع escape کمکی برای متن‌های معمولی
                                         $escape = function($text) {
                                             $chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!'];
                                             return str_replace($chars, array_map(fn($c) => '\\' . $c, $chars), $text);
                                         };
 
-                                        // ساخت پیام کامل
-                                        $msgText = "✅ *" . ($isRenewal ? "تمدید موفق!" : "خرید موفق!") . "*\n\n";
-                                        $msgText .= "📦 *پلن:* `" . $escape($planModel->name) . "`\n";
+                                        // تابع escape برای داخل کد بلاک (فقط ` و \)
+                                        $escapeCode = function($text) {
+                                            return str_replace(['\\', '`'], ['\\\\', '\`'], $text);
+                                        };
 
+                                        // ساخت پیام کامل
+                                        $msgTitle = $isRenewal ? "تمدید موفق\\!" : "خرید موفق\\!";
+                                        $msgText = "✅ *" . $msgTitle . "*\n\n";
+                                        $msgText .= "📦 *پلن:* `" . $escapeCode($planModel->name) . "`\n";
+
+                                        // استفاده از escape برای متن‌های معمولی
                                         if (!$isRenewal) {
                                             $msgText .= "🌍 *موقعیت:* {$locationFlag} " . $escape($locationName) . "\n";
                                             $msgText .= "🖥 *سرور:* " . $escape($serverName) . "\n";
                                         }
 
-                                        $msgText .= "💾 *حجم:* {$planModel->volume_gb} گیگابایت\n";
-                                        $msgText .= "📅 *مدت:* {$planModel->duration_days} روز\n";
-                                        $msgText .= "⏳ *انقضا:* `{$displayOrder->expires_at->format('Y/m/d H:i')}`\n";
-                                        $msgText .= "👤 *یوزرنیم:* `{$displayOrder->panel_username}`\n\n";
+                                        $msgText .= "💾 *حجم:* " . $escape($planModel->volume_gb . ' گیگابایت') . "\n";
+                                        $msgText .= "📅 *مدت:* " . $escape($planModel->duration_days . ' روز') . "\n";
+                                        $msgText .= "⏳ *انقضا:* `" . $displayOrder->expires_at->format('Y/m/d H:i') . "`\n";
+                                        $msgText .= "👤 *یوزرنیم:* `" . $escapeCode($displayOrder->panel_username) . "`\n\n";
                                         $msgText .= "🔗 *لینک کانفیگ شما:*\n";
-                                        $msgText .= "`{$finalConfig}`\n\n";
+                                        $msgText .= "`" . $escapeCode($finalConfig) . "`\n\n";
                                         $msgText .= $escape("⚠️ روی لینک بالا کلیک کنید تا کپی شود");
 
                                         // ساخت کیبورد

@@ -7,6 +7,7 @@ use App\Models\Inbound;
 use App\Models\Plan;
 use App\Services\MarzbanService;
 use App\Services\XUIService;
+use App\Services\PasargadService;
 use Filament\Notifications\Notification;
 use Illuminate\Support\Facades\Log;
 
@@ -140,6 +141,41 @@ trait ManagesServiceProvisioning
                     }
                 } else {
                     $this->handleProvisioningError($response['msg'] ?? 'پاسخ نامعتبر از XUI', $isTelegramContext, ['response' => $response]);
+                    return false;
+                }
+            }
+            // --- PASARGAD ---
+            elseif ($panelType === 'pasargad') {
+                $pasargadService = new PasargadService(
+                    $settings->get('pasargad_host'),
+                    $settings->get('pasargad_sudo_username'),
+                    $settings->get('pasargad_sudo_password'),
+                    $settings->get('pasargad_node_hostname')
+                );
+
+                $userData = [
+                    'expire' => $newExpiresAt->getTimestamp(),
+                    'data_limit' => $plan->data_limit_gb * 1024 * 1024 * 1024
+                ];
+
+                $response = $isRenewal
+                    ? $pasargadService->updateUser($uniqueUsername, $userData)
+                    : $pasargadService->createUser(array_merge($userData, [
+                        'username' => $uniqueUsername,
+                        'group_ids' => [(int)($plan->pasargad_group_id ?? $settings->get('pasargad_paid_group_id') ?? 1)],
+                    ]));
+
+                if ($response && (isset($response['subscription_url']) || isset($response['username']))) {
+                    $finalConfig = $response['subscription_url'] ?? $pasargadService->generateSubscriptionLink($uniqueUsername);
+                    $success = true;
+                    
+                    // ریست ترافیک در صورت تمدید
+                    if ($isRenewal) {
+                        $pasargadService->resetUserTraffic($uniqueUsername);
+                    }
+                } else {
+                    $error = $response['detail'] ?? 'پاسخ نامعتبر از پاسارگاد.';
+                    $this->handleProvisioningError($error, $isTelegramContext, ['response' => $response]);
                     return false;
                 }
             }
