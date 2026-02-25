@@ -212,7 +212,6 @@ class ServerResource extends Resource
                                     ->placeholder('sub.example.com')
                                     ->helperText('مثال: sub.domain.com یا 1.2.3.4 (بدون http/https)')
                                     ->prefix(fn (Forms\Get $get) => $get('is_https') ? 'https://' : 'http://')
-                                    ->suffix(fn (Forms\Get $get) => ':' . ($get('subscription_port') ?: '2053'))
                                     ->required(),
 
                                 Forms\Components\TextInput::make('subscription_path')
