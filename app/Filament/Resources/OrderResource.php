@@ -387,7 +387,7 @@ class OrderResource extends Resource
                                         $msgText .= "⏳ *انقضا:* `" . ($displayOrder->expires_at?->format('Y/m/d H:i') ?? 'نامشخص') . "`\n";
                                         $msgText .= "👤 *یوزرنیم:* `{$displayOrder->panel_username}`\n\n";
                                         $msgText .= "🔗 *لینک کانفیگ شما:*\n";
-                                        $msgText .= "`{$finalConfig}`\n\n";
+                                        $msgText .= "{$escape($finalConfig)}\n\n";
                                         $msgText .= $escape("⚠️ روی لینک بالا کلیک کنید تا کپی شود");
 
                                         // ساخت کیبورد

@@ -1868,7 +1868,7 @@ class WebhookController extends Controller
             $message .= "⏳ *انقضا:* `{$expiresText}`\n";
             $message .= "👤 *یوزرنیم:* `{$order->panel_username}`\n\n";
             $message .= "🔗 *لینک کانفیگ شما:*\n";
-            $message .= "`{$link}`\n\n";
+            $message .= "{$this->escape($link)}\n\n";
             $message .= "⚠️ روی لینک بالا کلیک کنید تا کپی شود";
 
             // کیبورد با دکمه کپی لینک
@@ -3566,7 +3566,7 @@ class WebhookController extends Controller
         $message .= "⏳ *انقضا:* `{$expiresText}`\n";
         $message .= "👤 *یوزرنیم:* `{$order->panel_username}`\n\n";
         $message .= "🔗 *لینک کانفیگ شما:*\n";
-        $message .= "`{$link}`\n\n";
+        $message .= "{$this->escape($link)}\n\n";
         $message .= "⚠️ روی لینک بالا کلیک کنید تا کپی شود";
 
         // کیبورد با دکمه‌های کاربردی
