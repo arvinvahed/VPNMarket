@@ -3,5 +3,7 @@
     "TelegramBot": true,
     "Referral": true,
     "Blog": true,
-    "MultiServer": true
+    "MultiServer": true,
+    "Reseller": true,
+    "MatinBackup": true
 }

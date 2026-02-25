@@ -50,7 +50,7 @@ class OrderResource extends Resource
     {
         return $table
             ->columns([
-                ImageColumn::make('card_payment_receipt')->label('رسید')->disk('public')->toggleable()->size(60)->circular()->url(fn (Order $record): ?string => $record->card_payment_receipt ? Storage::disk('public')->url($record->card_payment_receipt) : null)->openUrlInNewTab(),
+                ImageColumn::make('card_payment_receipt')->label('رسید')->disk('public')->toggleable()->size(60)->circular()->url(fn (Order $record): ?string => $record->card_payment_receipt ? Storage::url($record->card_payment_receipt) : null)->openUrlInNewTab(),
                 Tables\Columns\TextColumn::make('user.name')->label('کاربر')->searchable()->sortable(),
                 Tables\Columns\TextColumn::make('plan.name')->label('پلن / آیتم')->default(fn (Order $record): string => $record->plan_id ? $record->plan->name : "شارژ کیف پول")->description(function (Order $record): string {
                     if ($record->renews_order_id) return " (تمدید سفارش #" . $record->renews_order_id . ")";
@@ -73,7 +73,9 @@ class OrderResource extends Resource
                     ->action(function (Order $order) {
                         DB::transaction(function () use ($order) {
                             $settings = Setting::all()->pluck('value', 'key');
+                            /** @var \App\Models\User $user */
                             $user = $order->user;
+                            /** @var \App\Models\Plan|null $plan */
                             $plan = $order->plan;
 
                             // --- 1. شارژ کیف پول ---
@@ -95,6 +97,7 @@ class OrderResource extends Resource
 
                             // --- 2. تمدید یا خرید سرویس ---
                             $isRenewal = (bool)$order->renews_order_id;
+                            /** @var Order|null $originalOrder */
                             $originalOrder = $isRenewal ? Order::find($order->renews_order_id) : null;
 
                             if ($isRenewal && !$originalOrder) {
@@ -112,7 +115,15 @@ class OrderResource extends Resource
                             $targetServer = null;
 
                             // مقادیر پیش‌فرض
-                            $xuiHost = $settings->get('xui_host'); $xuiUser = $settings->get('xui_user'); $xuiPass = $settings->get('xui_pass'); $inboundId = (int)$settings->get('xui_default_inbound_id');
+                            $xuiHost = $settings->get('xui_host');
+                            $xuiUser = $settings->get('xui_user');
+                            $xuiPass = $settings->get('xui_pass');
+                            $inboundId = (int)$settings->get('xui_default_inbound_id');
+
+                            $marzbanHost = $settings->get('marzban_host');
+                            $marzbanUser = $settings->get('marzban_sudo_username');
+                            $marzbanPass = $settings->get('marzban_sudo_password');
+                            $marzbanNode = $settings->get('marzban_node_hostname');
 
                             // 🔥 اصلاح مهم: پیدا کردن سرور اصلی در حالت تمدید
                             $targetServerId = $order->server_id;
@@ -120,10 +131,39 @@ class OrderResource extends Resource
                                 $targetServerId = $originalOrder->server_id;
                             }
 
+                            Log::info("Order Approval Debug", [
+                                'order_id' => $order->id,
+                                'server_id_initial' => $order->server_id,
+                                'is_renewal' => $isRenewal,
+                                'target_server_id' => $targetServerId,
+                                'panel_type_default' => $panelType
+                            ]);
+
                             if ($isMultiLocationEnabled && class_exists('Modules\MultiServer\Models\Server') && $targetServerId) {
+                                /** @var \Modules\MultiServer\Models\Server|null $targetServer */
                                 $targetServer = \Modules\MultiServer\Models\Server::find($targetServerId);
                                 if ($targetServer && $targetServer->is_active) {
-                                    $panelType = 'xui'; $xuiHost = $targetServer->full_host; $xuiUser = $targetServer->username; $xuiPass = $targetServer->password; $inboundId = $targetServer->inbound_id;
+                                    // اصلاح: تعیین نوع پنل بر اساس نوع سرور
+                                    $panelType = strtolower($targetServer->type ?? 'xui');
+
+                                    Log::info("Target Server Found", [
+                                        'server_id' => $targetServer->id,
+                                        'server_name' => $targetServer->name,
+                                        'server_type' => $targetServer->type,
+                                        'resolved_panel_type' => $panelType
+                                    ]);
+
+                                    if ($panelType === 'marzban') {
+                                        $marzbanHost = $targetServer->full_host;
+                                        $marzbanUser = $targetServer->username;
+                                        $marzbanPass = $targetServer->password;
+                                        $marzbanNode = $targetServer->marzban_node_hostname ?? $marzbanHost;
+                                    } else {
+                                        $xuiHost = $targetServer->full_host;
+                                        $xuiUser = $targetServer->username;
+                                        $xuiPass = $targetServer->password;
+                                        $inboundId = $targetServer->inbound_id;
+                                    }
 
                                     // اگر تمدید است، سرور آیدی را روی سفارش جدید هم ست کن تا برای دفعه بعد گم نشود
                                     if ($isRenewal && !$order->server_id) {
@@ -141,10 +181,10 @@ class OrderResource extends Resource
                             try {
                                 if ($panelType === 'marzban') {
                                     $marzbanService = new MarzbanService(
-                                        (string) $settings->get('marzban_host'),
-                                        (string) $settings->get('marzban_sudo_username'),
-                                        (string) $settings->get('marzban_sudo_password'),
-                                        (string) $settings->get('marzban_node_hostname')
+                                        (string) ($marzbanHost ?? ''),
+                                        (string) ($marzbanUser ?? ''),
+                                        (string) ($marzbanPass ?? ''),
+                                        (string) ($marzbanNode ?? '')
                                     );
                                     $userData = ['expire' => $newExpiresAt->getTimestamp(), 'data_limit' => $plan->volume_gb * 1073741824];
                                     if ($isRenewal) {
@@ -344,7 +384,7 @@ class OrderResource extends Resource
 
                                         $msgText .= "💾 *حجم:* {$planModel->volume_gb} گیگابایت\n";
                                         $msgText .= "📅 *مدت:* {$planModel->duration_days} روز\n";
-                                        $msgText .= "⏳ *انقضا:* `{$displayOrder->expires_at->format('Y/m/d H:i')}`\n";
+                                        $msgText .= "⏳ *انقضا:* `" . ($displayOrder->expires_at?->format('Y/m/d H:i') ?? 'نامشخص') . "`\n";
                                         $msgText .= "👤 *یوزرنیم:* `{$displayOrder->panel_username}`\n\n";
                                         $msgText .= "🔗 *لینک کانفیگ شما:*\n";
                                         $msgText .= "`{$finalConfig}`\n\n";

@@ -7,6 +7,7 @@ use Filament\Models\Contracts\FilamentUser;
 use Filament\Panel;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
+use Modules\Reseller\Models\Reseller;
 
 use Modules\Ticketing\Models\Ticket;
 
@@ -89,5 +90,29 @@ class User extends Authenticatable implements FilamentUser
         return $this->hasMany(Notification::class)->where('is_read', false)->latest();
     }
 
+    public function agent(): \Illuminate\Database\Eloquent\Relations\HasOne
+    {
+        return $this->hasOne(Agent::class);
+    }
 
+    public function reseller(): \Illuminate\Database\Eloquent\Relations\HasOne
+    {
+        return $this->hasOne(Reseller::class);
+    }
+
+    public function resellerRequest(): \Illuminate\Database\Eloquent\Relations\HasOne
+    {
+        return $this->hasOne(\Modules\Reseller\Models\ResellerRequest::class);
+    }
+
+
+    public function isApprovedAgent(): bool
+    {
+        return $this->agent && $this->agent->status === 'approved';
+    }
+    
+    public function isReseller(): bool
+    {
+        return $this->reseller && $this->reseller->status === 'active';
+    }
 }

@@ -268,15 +268,25 @@ class OrderController extends Controller
             abort(404);
         }
 
+        $serverType = $plan->server_type ?? 'all';
+
         // دریافت لوکیشن‌ها و سرورهایی که فعال هستند و ظرفیت دارند
         $locations = \Modules\MultiServer\Models\Location::where('is_active', true)
-            ->with(['servers' => function ($query) {
+            ->with(['servers' => function ($query) use ($serverType) {
                 $query->where('is_active', true)
                     ->whereRaw('current_users < capacity'); // فقط سرورهای دارای ظرفیت
+                
+                if ($serverType !== 'all') {
+                    $query->where('type', $serverType);
+                }
             }])
-            ->whereHas('servers', function ($query) {
+            ->whereHas('servers', function ($query) use ($serverType) {
                 $query->where('is_active', true)
                     ->whereRaw('current_users < capacity');
+                
+                if ($serverType !== 'all') {
+                    $query->where('type', $serverType);
+                }
             })
             ->get();
 
@@ -287,13 +297,53 @@ class OrderController extends Controller
     public function storeWithServer(Request $request, Plan $plan)
     {
         $request->validate([
-            'server_id' => 'required|exists:ms_servers,id'
+            'server_id' => 'required|exists:ms_servers,id',
+            'custom_username' => 'nullable|string|regex:/^[a-zA-Z0-9_]+$/|min:3|max:20'
         ]);
 
         // چک کردن ظرفیت سرور
         $server = \Modules\MultiServer\Models\Server::find($request->server_id);
+        
+        // بررسی نوع سرور با پلن
+        if (isset($plan->server_type) && $plan->server_type !== 'all' && $server->type !== $plan->server_type) {
+             return redirect()->back()->with('error', 'این پلن با سرور انتخاب شده سازگار نیست.');
+        }
+
         if ($server->current_users >= $server->capacity) {
             return redirect()->back()->with('error', 'متأسفانه ظرفیت این سرور تکمیل شده است.');
+        }
+
+        // بررسی نام کاربری دلخواه
+        $customUsername = $request->custom_username;
+        if ($customUsername) {
+            try {
+                if ($server->type === 'marzban') {
+                    $marzbanService = new MarzbanService(
+                        $server->full_host,
+                        $server->username,
+                        $server->password,
+                        $server->marzban_node_hostname ?? ''
+                    );
+                    
+                    if ($marzbanService->getUser($customUsername)) {
+                         return redirect()->back()->with('error', "نام کاربری '$customUsername' قبلاً در سرور انتخاب شده استفاده شده است. لطفاً نام دیگری انتخاب کنید.")->withInput();
+                    }
+                } elseif ($server->type === 'xui') {
+                    $xuiService = new XUIService(
+                        $server->full_host,
+                        $server->username,
+                        $server->password
+                    );
+                    
+                    $inboundId = $server->inbound_id;
+                    if ($inboundId && $xuiService->checkClientExists($inboundId, $customUsername)) {
+                        return redirect()->back()->with('error', "نام کاربری '$customUsername' قبلاً در سرور انتخاب شده استفاده شده است. لطفاً نام دیگری انتخاب کنید.")->withInput();
+                    }
+                }
+            } catch (\Exception $e) {
+                Log::error('Error checking username existence: ' . $e->getMessage());
+                return redirect()->back()->with('error', 'خطا در بررسی نام کاربری. لطفاً دقایقی دیگر تلاش کنید یا بدون نام کاربری ادامه دهید.');
+            }
         }
 
         // ساخت سفارش
@@ -305,6 +355,7 @@ class OrderController extends Controller
             'discount_amount' => 0,
             'discount_code_id' => null,
             'amount' => $plan->price,
+            'panel_username' => $customUsername,
         ]);
 
         Auth::user()->notifications()->create([
@@ -396,7 +447,7 @@ class OrderController extends Controller
      */
     public function processWalletPayment(Order $order)
     {
-        if (auth()->id() !== $order->user_id) {
+        if (Auth::id() !== $order->user_id) {
             abort(403);
         }
 
@@ -404,7 +455,8 @@ class OrderController extends Controller
             return redirect()->back()->with('error', 'این عملیات برای شارژ کیف پول مجاز نیست.');
         }
 
-        $user = auth()->user();
+        /** @var \App\Models\User $user */
+        $user = Auth::user();
         $plan = $order->plan;
         $originalPrice = $plan->price;
 
@@ -449,7 +501,11 @@ class OrderController extends Controller
                 $settings = Setting::all()->pluck('value', 'key');
                 $success = false;
                 $finalConfig = '';
-                $panelType = $settings->get('panel_type');
+                
+                // Determine Panel Configuration
+                $server = $order->server;
+                $panelType = $server ? $server->type : $settings->get('panel_type');
+                
                 $isRenewal = (bool) $order->renews_order_id;
 
                 $originalOrder = $isRenewal ? Order::find($order->renews_order_id) : null;
@@ -469,11 +525,23 @@ class OrderController extends Controller
                 // پنل MARZBAN
                 // ==========================================
                 if ($panelType === 'marzban') {
+                    $marzbanHost = $server ? $server->full_host : $settings->get('marzban_host');
+                    $marzbanUser = $server ? $server->username : $settings->get('marzban_sudo_username');
+                    $marzbanPass = $server ? $server->password : $settings->get('marzban_sudo_password');
+                    $nodeHostname = $server ? $server->marzban_node_hostname : $settings->get('marzban_node_hostname');
+
+                    Log::info('Attempting Marzban Connection', [
+                        'host' => $marzbanHost,
+                        'username' => $marzbanUser,
+                        'server_id' => $server ? $server->id : 'global',
+                        'is_server_set' => !empty($server),
+                    ]);
+
                     $marzbanService = new MarzbanService(
-                        $settings->get('marzban_host'),
-                        $settings->get('marzban_sudo_username'),
-                        $settings->get('marzban_sudo_password'),
-                        $settings->get('marzban_node_hostname')
+                        $marzbanHost ?? '',
+                        $marzbanUser ?? '',
+                        $marzbanPass ?? '',
+                        $nodeHostname ?? ''
                     );
 
                     $userData = [
@@ -488,6 +556,9 @@ class OrderController extends Controller
                     if ($response && (isset($response['subscription_url']) || isset($response['username']))) {
                         $finalConfig = $marzbanService->generateSubscriptionLink($response);
                         $success = true;
+                    } else {
+                        Log::error('Marzban User Creation Failed', ['response' => $response]);
+                        throw new \Exception('خطا در ایجاد کاربر در پنل مرزبان. لطفاً با پشتیبانی تماس بگیرید.');
                     }
                 }
 
@@ -495,26 +566,55 @@ class OrderController extends Controller
                 // پنل X-UI (SANAEI)
                 // ==========================================
                 elseif ($panelType === 'xui') {
+                    $xuiHost = $server ? $server->full_host : $settings->get('xui_host');
+                    $xuiUser = $server ? $server->username : $settings->get('xui_user');
+                    $xuiPass = $server ? $server->password : $settings->get('xui_pass');
+
                     $xuiService = new XUIService(
-                        $settings->get('xui_host'),
-                        $settings->get('xui_user'),
-                        $settings->get('xui_pass')
+                        $xuiHost ?? '',
+                        $xuiUser ?? '',
+                        $xuiPass ?? ''
                     );
 
-                    $defaultInboundId = $settings->get('xui_default_inbound_id');
+                    $defaultInboundId = $server ? $server->inbound_id : $settings->get('xui_default_inbound_id');
 
                     if (empty($defaultInboundId)) {
-                        throw new \Exception('تنظیمات اینباند پیش‌فرض برای X-UI یافت نشد.');
+                        throw new \Exception('تنظیمات اینباند برای X-UI یافت نشد.');
                     }
 
                     $numericInboundId = (int) $defaultInboundId;
+                    
+                    // Try to find inbound in DB (for stream settings)
                     $inbound = Inbound::whereJsonContains('inbound_data->id', $numericInboundId)->first();
-
+                    
+                    // If not in DB, we might need to fetch from API or handle gracefully
+                    // For now, let's assume if we use MultiServer, we might fallback to API or just require DB sync
+                    // But if $inbound is null, we can't get streamSettings for VLESS link generation unless we fetch from API
+                    
                     if (!$inbound || !$inbound->inbound_data) {
-                        throw new \Exception("اینباند با ID {$defaultInboundId} در دیتابیس یافت نشد.");
+                         // Attempt to fetch from API if not in DB?
+                         // For now, throw error as before, but with clearer message
+                         // Or we can try to fetch it if we have xuiService
+                         try {
+                             if ($xuiService->login()) {
+                                 $inbounds = $xuiService->getInbounds();
+                                 foreach($inbounds as $ib) {
+                                     if ($ib['id'] == $numericInboundId) {
+                                         $inboundData = $ib;
+                                         break;
+                                     }
+                                 }
+                             }
+                         } catch (\Exception $e) {
+                             // ignore
+                         }
+                    } else {
+                        $inboundData = $inbound->inbound_data;
                     }
 
-                    $inboundData = $inbound->inbound_data;
+                    if (!isset($inboundData)) {
+                         throw new \Exception("اینباند با ID {$defaultInboundId} یافت نشد.");
+                    }
 
                     if (!$xuiService->login()) {
                         throw new \Exception('خطا در لاگین به پنل X-UI.');
@@ -674,7 +774,7 @@ class OrderController extends Controller
 
                 OrderPaid::dispatch($order);
             });
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             Log::error('Wallet Payment Failed: ' . $e->getMessage(), [
                 'trace' => $e->getTraceAsString()
             ]);
@@ -682,11 +782,11 @@ class OrderController extends Controller
             Auth::user()->notifications()->create([
                 'type' => 'payment_failed',
                 'title' => 'خطا در پرداخت با کیف پول!',
-                'message' => "پرداخت سفارش شما با خطا مواجه شد: " . $e->getMessage(),
+                'message' => "پرداخت سفارش شما با خطا مواجه شد. لطفاً با پشتیبانی تماس بگیرید.",
                 'link' => route('dashboard', ['tab' => 'order_history']),
             ]);
 
-            return redirect()->route('dashboard')->with('error', 'پرداخت با خطا مواجه شد: ' . $e->getMessage());
+            return redirect()->route('dashboard')->with('error', 'پرداخت با خطا مواجه شد. لطفاً با پشتیبانی تماس بگیرید.');
         }
 
 

@@ -6,7 +6,7 @@
     </x-slot>
 
     <div class="py-10">
-        <div class="max-w-6xl mx-auto px-4">
+        <div class="max-w-6xl mx-auto px-4" x-data="{ customUsername: '' }">
 
             <!-- Hero -->
             <div class="mb-10 rounded-3xl bg-gradient-to-br from-indigo-600 via-purple-600 to-pink-600
@@ -19,6 +19,32 @@
                         <span class="px-3 py-1 bg-white/20 rounded-xl font-bold">
                             {{ $plan->name }}
                         </span>
+                    </p>
+                </div>
+            </div>
+
+            <!-- Custom Username Input -->
+            <div class="mb-8 max-w-md mx-auto">
+                <div class="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700">
+                    <label class="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-3">
+                        👤 نام کاربری دلخواه (اختیاری)
+                    </label>
+                    <div class="relative">
+                        <input type="text" x-model="customUsername"
+                               @input="$dispatch('username-changed', customUsername)"
+                               class="w-full pl-4 pr-10 py-3 rounded-xl border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all"
+                               placeholder="مثال: myname123 (فقط حروف انگلیسی و عدد)">
+                        <div class="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
+                            <svg class="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                            </svg>
+                        </div>
+                    </div>
+                    <p class="mt-2 text-xs text-gray-500 dark:text-gray-400 flex items-center gap-1">
+                        <svg class="w-4 h-4 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        در صورت خالی گذاشتن، نام کاربری به صورت تصادفی تولید می‌شود.
                     </p>
                 </div>
             </div>
@@ -108,6 +134,7 @@
                         <form action="{{ route('order.store-with-server', $plan->id) }}" method="POST">
                             @csrf
                             <input type="hidden" name="server_id" value="{{ $bestServer?->id }}">
+                            <input type="hidden" name="custom_username" :value="customUsername">
                             <button type="submit"
                                     @disabled($isFull)
                                     class="w-full py-3 rounded-xl font-bold text-white

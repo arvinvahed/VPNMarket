@@ -59,6 +59,18 @@ class PlanResource extends Resource
                     ->default(30)
                     ->helperText('مثال: 30 = ۱ ماهه، 90 = ۳ ماهه، 365 = ۱ ساله')
                     ->rules(['min:1']),
+
+                Forms\Components\Select::make('server_type')
+                    ->label('نوع سرور (پنل)')
+                    ->options([
+                        'all' => 'همه سرورها (سنایی و مرزبان)',
+                        'xui' => 'فقط سنایی / X-UI',
+                        'marzban' => 'فقط مرزبان',
+                    ])
+                    ->default('all')
+                    ->required()
+                    ->helperText('مشخص کنید این پلن روی چه نوع سرورهایی قابل استفاده است.'),
+
                 //========================================================
 
                 Forms\Components\Toggle::make('is_popular')
@@ -94,6 +106,20 @@ class PlanResource extends Resource
                     ->label('قیمت ماهانه')
                     ->formatStateUsing(fn ($record) => number_format($record->monthly_price) . ' تومان')
                     ->sortable(),
+
+                Tables\Columns\TextColumn::make('server_type')
+                    ->label('نوع سرور')
+                    ->formatStateUsing(fn (string $state): string => match ($state) {
+                        'all' => 'همه',
+                        'xui' => 'سنایی',
+                        'marzban' => 'مرزبان',
+                    })
+                    ->badge()
+                    ->color(fn (string $state): string => match ($state) {
+                        'all' => 'gray',
+                        'xui' => 'success',
+                        'marzban' => 'warning',
+                    }),
 
 
 

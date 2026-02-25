@@ -134,7 +134,7 @@
                     <div x-show="tab === 'my_services'" x-transition.opacity>
                         @if($orders->isNotEmpty())
                             <div class="space-y-4">
-                                @foreach ($orders->filter(fn($order) => !empty($order->config_details)) as $order)
+                                @foreach ($orders as $order)
                                     <div class="p-5 rounded-xl bg-gray-50 dark:bg-gray-800/50 shadow-md transition-shadow hover:shadow-lg" x-data="{ open: false }">
                                         <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4 items-center text-right">
                                             <div>
@@ -147,7 +147,9 @@
                                             </div>
                                             <div>
                                                 <span class="text-xs text-gray-500">وضعیت</span>
-                                                <p class="font-semibold text-green-500">فعال</p>
+                                                <p class="font-semibold {{ !empty($order->config_details) ? 'text-green-500' : 'text-yellow-500' }}">
+                                                    {{ !empty($order->config_details) ? 'فعال' : 'در حال آماده‌سازی' }}
+                                                </p>
                                             </div>
                                             <div>
                                                 <span class="text-xs text-gray-500">تاریخ انقضا</span>
@@ -161,33 +163,37 @@
                                                             تمدید
                                                         </button>
                                                     </form>
-                                                    <button @click="open = !open" class="w-full sm:w-auto px-3 py-2 bg-gray-700 text-white text-xs rounded-lg hover:bg-gray-600 focus:outline-none">
-                                                        <span x-show="!open">کانفیگ</span>
-                                                        <span x-show="open">بستن</span>
-                                                    </button>
+                                                    @if(!empty($order->config_details))
+                                                        <button @click="open = !open" class="w-full sm:w-auto px-3 py-2 bg-gray-700 text-white text-xs rounded-lg hover:bg-gray-600 focus:outline-none">
+                                                            <span x-show="!open">کانفیگ</span>
+                                                            <span x-show="open">بستن</span>
+                                                        </button>
+                                                    @endif
                                                 </div>
                                             </div>
                                         </div>
-                                        <div x-show="open" x-transition x-cloak class="mt-4 pt-4 border-t dark:border-gray-700">
-                                            <h4 class="font-bold mb-2 text-gray-900 dark:text-white text-right">اطلاعات سرویس:</h4>
-                                            <div class="p-3 bg-gray-100 dark:bg-gray-900 rounded-lg relative" x-data="{copied: false, copyToClipboard(text) { navigator.clipboard.writeText(text); this.copied = true; setTimeout(() => { this.copied = false }, 2000); }}">
-                                                <pre class="text-left text-sm text-gray-800 dark:text-gray-300 whitespace-pre-wrap overflow-x-auto" dir="ltr" style="padding-top: 2.5rem;">{{ $order->config_details }}</pre>
+                                        @if(!empty($order->config_details))
+                                            <div x-show="open" x-transition x-cloak class="mt-4 pt-4 border-t dark:border-gray-700">
+                                                <h4 class="font-bold mb-2 text-gray-900 dark:text-white text-right">اطلاعات سرویس:</h4>
+                                                <div class="p-3 bg-gray-100 dark:bg-gray-900 rounded-lg relative" x-data="{copied: false, copyToClipboard(text) { navigator.clipboard.writeText(text); this.copied = true; setTimeout(() => { this.copied = false }, 2000); }}">
+                                                    <pre class="text-left text-sm text-gray-800 dark:text-gray-300 whitespace-pre-wrap overflow-x-auto" dir="ltr" style="padding-top: 2.5rem;">{{ $order->config_details }}</pre>
 
-                                                <!-- کانتینر دکمه‌ها در سمت راست -->
-                                                <div class="absolute top-2 right-2 flex gap-2">
-                                                    <!-- دکمه کپی -->
-                                                    <button @click="copyToClipboard(`{{ $order->config_details }}`)" class="px-2 py-1 text-xs bg-gray-300 dark:bg-gray-700 rounded hover:bg-gray-400 transition-colors flex items-center gap-1">
-                                                        <span x-show="!copied">📋 کپی</span>
-                                                        <span x-show="copied" class="text-green-600 font-bold">✓ کپی شد!</span>
-                                                    </button>
+                                                    <!-- کانتینر دکمه‌ها در سمت راست -->
+                                                    <div class="absolute top-2 right-2 flex gap-2">
+                                                        <!-- دکمه کپی -->
+                                                        <button @click="copyToClipboard(`{{ $order->config_details }}`)" class="px-2 py-1 text-xs bg-gray-300 dark:bg-gray-700 rounded hover:bg-gray-400 transition-colors flex items-center gap-1">
+                                                            <span x-show="!copied">📋 کپی</span>
+                                                            <span x-show="copied" class="text-green-600 font-bold">✓ کپی شد!</span>
+                                                        </button>
 
-                                                    <!-- دکمه نمایش QR Code -->
-                                                    <button @click="$store.qrModal.open('{{ $order->config_details }}', '{{ $order->plan->name }}')" class="px-2 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors flex items-center gap-1">
-                                                        📱 QR Code
-                                                    </button>
+                                                        <!-- دکمه نمایش QR Code -->
+                                                        <button @click="$store.qrModal.open('{{ $order->config_details }}', '{{ $order->plan->name }}')" class="px-2 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors flex items-center gap-1">
+                                                            📱 QR Code
+                                                        </button>
+                                                    </div>
                                                 </div>
                                             </div>
-                                        </div>
+                                        @endif
                                     </div>
                                 @endforeach
                             </div>

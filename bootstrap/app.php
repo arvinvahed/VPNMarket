@@ -11,8 +11,15 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        // ✅ مهم: CSRF exception برای agent
         $middleware->validateCsrfTokens(except: [
-            'webhooks/*',  // تلگرام از CSRF معاف
+            'webhooks/*',
+            'agent/*',  // ← این خط مهمه!
+            'api/*',
+        ]);
+
+        $middleware->alias([
+            'telegram.webapp' => \App\Http\Middleware\TelegramWebAppAuth::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

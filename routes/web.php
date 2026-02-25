@@ -1,7 +1,10 @@
 <?php
 
+use App\Http\Controllers\Agent\WebAppController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\ProfileController;
+
+
 use App\Models\Plan;
 use App\Models\Setting;
 use App\Models\User;
@@ -45,11 +48,49 @@ Route::get('/', function () {
 })->name('home');
 
 
-Route::prefix('webapp')->middleware('web')->group(function () {
-    Route::get('/', [WebAppController::class, 'index'])->name('webapp.index');
-    Route::get('/plans', [WebAppController::class, 'plans'])->name('webapp.plans');
-    Route::get('/order/{id}', [WebAppController::class, 'orderDetail'])->name('webapp.order');
+Route::prefix('agent')->middleware(['telegram.webapp'])->group(function () {
+
+    // GET - صفحه فرم
+    Route::get('/register', [WebAppController::class, 'registerForm'])
+        ->name('webapp.agent.register');
+
+
+    Route::post('/register', [WebAppController::class, 'submitRegistration'])
+        ->name('webapp.agent.register.post'); //
+
+    // داشبورد
+    Route::get('/dashboard', [WebAppController::class, 'dashboard'])
+        ->name('webapp.agent.dashboard');
+
+    // شارژ کیف پول
+    Route::get('/deposit', [WebAppController::class, 'depositForm'])
+        ->name('webapp.agent.deposit');
+
+    Route::post('/deposit', [WebAppController::class, 'submitDeposit'])
+        ->name('webapp.agent.deposit.post');
+
+    // خرید سرور
+    Route::get('/buy-server', [WebAppController::class, 'buyServerForm'])
+        ->name('webapp.agent.buy-server');
+
+    Route::post('/buy-server', [WebAppController::class, 'submitBuyServer'])
+        ->name('webapp.agent.buy-server.post');
+
+    Route::post('/buy-product', [WebAppController::class, 'buyVpnProduct'])
+        ->name('webapp.agent.buy-product');
+
+    Route::get('/accounts', [WebAppController::class, 'accounts'])
+        ->name('webapp.agent.accounts');
+
+    Route::post('/accounts/{id}/delete', [WebAppController::class, 'deleteAccount'])
+        ->name('webapp.agent.accounts.delete');
+
+    Route::post('/accounts/{id}/renew', [WebAppController::class, 'renewAccount'])
+        ->name('webapp.agent.accounts.renew');
 });
+
+
+
 
 Route::middleware(['auth'])->group(function () {
 
@@ -131,4 +172,3 @@ Route::post('/webhooks/telegram', [TelegramWebhookController::class, 'handle'])-
 
 /* BREEZE AUTHENTICATION */
 require __DIR__.'/auth.php';
-

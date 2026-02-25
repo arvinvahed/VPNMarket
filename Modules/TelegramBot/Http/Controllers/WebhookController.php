@@ -10,6 +10,7 @@ use App\Services\XUIService;
 use App\Models\User;
 use App\Services\MarzbanService;
 use App\Models\Inbound;
+use Modules\Reseller\Models\Reseller;
 use Modules\Ticketing\Events\TicketCreated;
 use Modules\Ticketing\Events\TicketReplied;
 use Modules\Ticketing\Models\Ticket;
@@ -115,6 +116,113 @@ class WebhookController extends Controller
         }
     }
 
+    public function sendResellerRequestApprovedMessage(User $user): bool
+    {
+        $chatId = (string) $user->telegram_chat_id;
+        if (!$chatId) {
+            return false;
+        }
+
+        try {
+            if ($this->settings->isEmpty()) {
+                $this->settings = Setting::all()->pluck('value', 'key');
+            }
+            $botToken = $this->settings->get('telegram_bot_token');
+            if (!$botToken) {
+                Log::error('Cannot send approval message: bot token is not set.');
+                return false;
+            }
+            Telegram::setAccessToken($botToken);
+
+            $text = "🎉 *درخواست نمایندگی شما تایید شد*\n\n";
+            $text .= "اکنون حساب نمایندگی شما فعال شده و می‌توانید از طریق پنل نمایندگی، سرور و اکانت برای مشتریان خود بسازید.\n\n";
+            $text .= "برای ورود به پنل نمایندگی، روی دکمه زیر بزنید:";
+
+            $webAppUrl = route('webapp.agent.dashboard', ['user_id' => $chatId]);
+            if (str_starts_with($webAppUrl, 'http://')) {
+                $webAppUrl = str_replace('http://', 'https://', $webAppUrl);
+            }
+
+            $keyboard = Keyboard::make()->inline()
+                ->row([
+                    Keyboard::inlineButton([
+                        'text' => '🚀 ورود به پنل نمایندگی (Mini App)',
+                        'web_app' => ['url' => $webAppUrl],
+                    ]),
+                ])
+                ->row([
+                    Keyboard::inlineButton([
+                        'text' => '🏠 بازگشت به منوی اصلی',
+                        'callback_data' => '/start',
+                    ]),
+                ]);
+
+            Telegram::sendMessage([
+                'chat_id' => $chatId,
+                'text' => $this->escape($text),
+                'parse_mode' => 'MarkdownV2',
+                'reply_markup' => $keyboard,
+            ]);
+
+            return true;
+        } catch (\Exception $e) {
+            Log::error('Failed to send reseller request approval Telegram message: ' . $e->getMessage(), [
+                'user_id' => $user->id ?? null,
+            ]);
+            return false;
+        }
+    }
+
+    public function sendResellerRequestRejectedMessage(User $user, ?string $reason = null): bool
+    {
+        $chatId = (string) $user->telegram_chat_id;
+        if (!$chatId) {
+            return false;
+        }
+
+        try {
+            if ($this->settings->isEmpty()) {
+                $this->settings = Setting::all()->pluck('value', 'key');
+            }
+            $botToken = $this->settings->get('telegram_bot_token');
+            if (!$botToken) {
+                Log::error('Cannot send rejection message: bot token is not set.');
+                return false;
+            }
+            Telegram::setAccessToken($botToken);
+
+            $reasonText = $reason ?: 'مشخص نشده';
+
+            $text = "❌ *درخواست نمایندگی شما تایید نشد*\n\n";
+            $text .= "دلیل: {$reasonText}\n\n";
+            $text .= "اگر مایل باشید می‌توانید برای توضیحات بیشتر یک تیکت پشتیبانی ثبت کنید.";
+
+            $keyboard = Keyboard::make()->inline()
+                ->row([Keyboard::inlineButton([
+                    'text' => '📝 ایجاد تیکت پشتیبانی',
+                    'callback_data' => '/support_menu',
+                ])])
+                ->row([Keyboard::inlineButton([
+                    'text' => '⬅️ بازگشت به منوی اصلی',
+                    'callback_data' => '/start',
+                ])]);
+
+            Telegram::sendMessage([
+                'chat_id' => $chatId,
+                'text' => $this->escape($text),
+                'parse_mode' => 'MarkdownV2',
+                'reply_markup' => $keyboard,
+            ]);
+
+            return true;
+        } catch (\Exception $e) {
+            Log::error('Failed to send reseller request rejection Telegram message: ' . $e->getMessage(), [
+                'user_id' => $user->id ?? null,
+            ]);
+            return false;
+        }
+    }
+
     public function handle(Request $request)
     {
         try {
@@ -143,10 +251,291 @@ class WebhookController extends Controller
         return response('ok', 200);
     }
 
+
+
+
+    protected function sendSiteCredentials(User $user, ?int $messageId = null)
+    {
+        $chatId = $user->telegram_chat_id;
+        $username = $user->email; // Use email as username for now
+        
+        $loginUrl = $this->settings->get('site_login_url');
+        if (empty($loginUrl)) {
+            $loginUrl = route('login');
+        }
+
+        $message = "🔐 *اطلاعات ورود به پنل کاربری*\n\n";
+        $message .= "👤 *نام کاربری:* `{$username}`\n";
+        $message .= "🔑 *کلمه عبور:* (مخفی)\n\n";
+        $message .= "🌐 *آدرس ورود:* \n" . $this->escape($loginUrl) . "\n\n";
+        $message .= "⚠️ *نکته:* اگر رمز عبور خود را فراموش کرده‌اید یا اولین بار است که وارد می‌شوید، می‌توانید یک رمز عبور جدید بسازید.";
+
+        $keyboard = Keyboard::make()->inline()
+            ->row([
+                Keyboard::inlineButton(['text' => '🔄 ساخت رمز عبور جدید', 'callback_data' => 'generate_new_password']),
+            ]);
+
+        $this->sendOrEditMessage($chatId, $message, $keyboard, $messageId);
+    }
+
+    protected function generateNewPassword(User $user, ?int $messageId = null)
+    {
+        $newPassword = Str::random(10); // Generate a 10-char random password
+        $user->password = Hash::make($newPassword);
+        $user->save();
+
+        $chatId = $user->telegram_chat_id;
+        $username = $user->email;
+        
+        $loginUrl = $this->settings->get('site_login_url');
+        if (empty($loginUrl)) {
+            $loginUrl = route('login');
+        }
+
+        $message = "✅ *رمز عبور جدید ساخته شد*\n\n";
+        $message .= "👤 *نام کاربری:* `{$username}`\n";
+        $message .= "🔑 *کلمه عبور جدید:* `{$newPassword}`\n\n";
+        $message .= "🌐 *آدرس ورود:* \n" . $this->escape($loginUrl) . "\n\n";
+        $message .= "⚠️ لطفاً این رمز را در جای امنی یادداشت کنید.";
+
+        // We can just show a "Back" button or no button
+        $keyboard = Keyboard::make()->inline()
+            ->row([
+                Keyboard::inlineButton(['text' => '🗑 حذف پیام (امنیت)', 'callback_data' => '/cancel_action']),
+            ]);
+
+        $this->sendOrEditMessage($chatId, $message, $keyboard, $messageId);
+    }
+
+    protected function handleAgentMenu($user)
+    {
+        $chatId = $user->telegram_chat_id;
+
+        // چک کردن وضعیت نمایندگی
+        $reseller = $user->reseller;
+        $resellerRequest = $user->resellerRequest;
+
+        if (!$reseller && !$resellerRequest) {
+            // هنوز درخواست نداده - پیشنهاد ثبت نام
+            $this->showAgentRegistration($user);
+            return;
+        }
+
+        // اگر نماینده فعال هست، داشبورد رو نشون بده
+        if ($reseller && $reseller->status === 'active') {
+            $this->showAgentDashboard($reseller, $user);
+            return;
+        }
+
+        // اگر درخواست داره، وضعیت درخواست رو بررسی کن
+        if ($resellerRequest) {
+            switch ($resellerRequest->status) {
+            case 'pending':
+                $message = "⏳ *درخواست نمایندگی در انتظار بررسی*\n\n";
+                $message .= "درخواست شما برای نمایندگی در حال بررسی توسط ادمین است.\n";
+                $message .= "لطفاً صبور باشید، پس از تایید به شما اطلاع داده خواهد شد.";
+
+                $keyboard = Keyboard::make()->inline()
+                    ->row([Keyboard::inlineButton(['text' => '🔄 بررسی مجدد وضعیت', 'callback_data' => 'agent_check_status'])])
+                    ->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت به منو', 'callback_data' => '/start'])]);
+
+                Telegram::sendMessage([
+                    'chat_id' => $chatId,
+                    'text' => $this->escape($message),
+                    'parse_mode' => 'MarkdownV2',
+                    'reply_markup' => $keyboard
+                ]);
+                break;
+
+            case 'rejected':
+                $message = "❌ *درخواست نمایندگی رد شد*\n\n";
+                $message .= "دلیل: " . ($resellerRequest->rejection_reason ?: 'مشخص نشده') . "\n\n";
+                $message .= "می‌توانید دوباره درخواست دهید.";
+
+                $keyboard = Keyboard::make()->inline()
+                    ->row([Keyboard::inlineButton(['text' => '📝 ثبت درخواست جدید', 'callback_data' => 'agent_register'])])
+                    ->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت', 'callback_data' => '/start'])]);
+
+                Telegram::sendMessage([
+                    'chat_id' => $chatId,
+                    'text' => $this->escape($message),
+                    'parse_mode' => 'MarkdownV2',
+                    'reply_markup' => $keyboard
+                ]);
+                break;
+
+            case 'approved':
+                // درخواست تایید شده، اما هنوز نماینده فعال نشده
+                $message = "✅ *درخواست نمایندگی شما تایید شده*\n\n";
+                $message .= "لطفاً منتظر بمانید تا حساب نمایندگی شما فعال شود.";
+                
+                $keyboard = Keyboard::make()->inline()
+                    ->row([Keyboard::inlineButton(['text' => '🔄 بررسی مجدد وضعیت', 'callback_data' => 'agent_check_status'])])
+                    ->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت به منو', 'callback_data' => '/start'])]);
+
+                Telegram::sendMessage([
+                    'chat_id' => $chatId,
+                    'text' => $this->escape($message),
+                    'parse_mode' => 'MarkdownV2',
+                    'reply_markup' => $keyboard
+                ]);
+                break;
+        }
+        
+        // اگر نماینده غیرفعال یا تعلیق شده باشه
+        if ($reseller && in_array($reseller->status, ['inactive', 'banned'])) {
+            $message = "🚫 *نمایندگی شما غیرفعال شده*\n\n";
+            $message .= $reseller->status === 'banned' ? "نمایندگی شما مسدود شده است." : "نمایندگی شما غیرفعال شده است.";
+            $message .= "\nلطفاً با پشتیبانی تماس بگیرید.";
+
+                Telegram::sendMessage([
+                    'chat_id' => $chatId,
+                    'text' => $this->escape($message),
+                    'parse_mode' => 'MarkdownV2',
+                    'reply_markup' => $this->getReplyMainMenu()
+                ]);
+        }
+        
+        // بستن if مربوط به بررسی درخواست
+        }
+    }
+
+    protected function getSecureWebAppUrl(string $path): string
+    {
+        // می‌گیره: /agent/register
+        // برمی‌گردونه: https://xxx.ngrok-free.app/agent/register
+
+        $url = config('app.url') . $path;
+
+        // اجبار به HTTPS
+        if (str_starts_with($url, 'http://')) {
+            $url = 'https://' . substr($url, 7);
+        }
+
+        // حذف اسلش اضافی
+        $url = rtrim($url, '/');
+
+        return $url;
+    }
+
+
+    /**
+     * 📝 نمایش فرم ثبت نام نمایندگی
+     */
+    protected function showAgentRegistration($user)
+    {
+        $chatId = $user->telegram_chat_id;
+
+        // ✅ خواندن قیمت از جدول reseller_plans
+        $agentPlan = \Modules\Reseller\Models\ResellerPlan::where('type', 'quota')
+            ->where('is_active', true)
+            ->first();
+
+        $registrationFee = $agentPlan ? $agentPlan->price : 30000;
+        $maxAccounts = $agentPlan ? $agentPlan->account_limit : 16;
+
+        $message = "🏢 *درخواست نمایندگی*\n\n";
+        $message .= "با عضویت در سیستم نمایندگی می‌توانید:\n";
+        $message .= "✅ تا " . $this->escape($maxAccounts) . " اکانت بسازید و بفروشید\n";
+        $message .= "✅ سرور اختصاصی خریداری کنید\n";
+        $message .= "✅ از تعرفه ویژه نمایندگان استفاده کنید\n\n";
+        $message .= "💰 *هزینه ثبت‌نام: " . $this->escape(number_format($registrationFee)) . " تومان*\n";
+        $message .= "📱 برای ثبت درخواست، مینی‌اپ را باز کنید:";
+
+        $webAppUrl = route('webapp.agent.register', ['user_id' => $chatId]);
+        $webAppUrl = str_replace('http://', 'https://', $webAppUrl);
+
+        Log::info('Agent WebApp URL generated', [
+            'url' => $webAppUrl,
+            'registration_fee' => $registrationFee,
+            'max_accounts' => $maxAccounts,
+        ]);
+
+        $keyboard = Keyboard::make()->inline()
+            ->row([Keyboard::inlineButton([
+                'text' => '📱 ورود به مینی‌اپ نمایندگی',
+                'web_app' => ['url' => $webAppUrl]
+            ])])
+            ->row([Keyboard::inlineButton([
+                'text' => '⬅️ بازگشت',
+                'callback_data' => '/start'
+            ])]);
+
+        Telegram::sendMessage([
+            'chat_id' => $chatId,
+            'text' => $this->escape($message),
+            'parse_mode' => 'MarkdownV2',
+            'reply_markup' => $keyboard
+        ]);
+    }
+    /**
+     * 📊 داشبورد نماینده تایید شده
+     */
+    protected function showAgentDashboard($reseller, $user)
+    {
+        $chatId = $user->telegram_chat_id;
+
+
+        $agentAccountPlan = \Modules\Reseller\Models\ResellerPlan::where('type', 'pay_as_you_go')
+            ->where('is_active', true)
+            ->first();
+
+        $accountPrice = $agentAccountPlan ? $agentAccountPlan->price_per_account : 30000; // fallback
+
+        $balance = number_format($reseller->wallet ? $reseller->wallet->balance : 0);
+        $createdCount = $reseller->accounts()->count();
+        $maxCount = $reseller->max_accounts;
+
+        $message = "🏢 *پنل مدیریت نمایندگی*\n\n";
+        $message .= "👤 نام: {$this->escape($user->name)}\n";
+        $message .= "💰 موجودی: *{$balance} تومان*\n";
+        $message .= "📊 وضعیت اکانت‌ها: *{$createdCount} / {$maxCount}*\n";
+        $message .= "💸 قیمت هر اکانت: *" . number_format($accountPrice) . " تومان*\n\n";
+        $message .= "👇 برای مدیریت کامل روی دکمه زیر کلیک کنید:";
+
+
+
+        $webAppUrl = route('webapp.agent.dashboard', ['user_id' => $chatId]);
+
+        if (str_starts_with($webAppUrl, 'http://')) {
+            $webAppUrl = str_replace('http://', 'https://', $webAppUrl);
+        }
+
+
+        // ✅ ساخت دکمه با قابلیت web_app
+        $keyboard = Keyboard::make()->inline()
+            ->row([
+                Keyboard::inlineButton([
+                    'text' => '🚀 ورود به پنل نمایندگی (Mini App)',
+                    'web_app' => ['url' => $webAppUrl] // این خط باعث باز شدن مینی‌اپ می‌شود
+                ])
+            ])
+            ->row([
+                Keyboard::inlineButton(['text' => '🏠 بازگشت به منوی اصلی', 'callback_data' => '/start'])
+            ]);
+
+        Telegram::sendMessage([
+            'chat_id' => $chatId,
+            'text' => $this->escape($message),
+            'parse_mode' => 'MarkdownV2',
+            'reply_markup' => $keyboard
+        ]);
+    }
+
+
     protected function handleTextMessage($update)
     {
         $message = $update->getMessage();
-        $chatId = $message->getChat()->getId();
+        if (!$message) {
+            return;
+        }
+        
+        $chat = $message->getChat();
+        if (!$chat) {
+            return;
+        }
+        
+        $chatId = $chat->getId();
         $text = trim($message->getText() ?? '');
         $user = User::where('telegram_chat_id', $chatId)->first();
 
@@ -156,7 +545,8 @@ class WebhookController extends Controller
         }
 
         if (!$user) {
-            $userFirstName = $message->getFrom()->getFirstName() ?? 'کاربر';
+            $from = $message->getFrom();
+            $userFirstName = $from ? $from->getFirstName() ?? 'کاربر' : 'کاربر';
             $password = Str::random(10);
             $user = User::create([
                 'name' => $userFirstName,
@@ -212,11 +602,11 @@ class WebhookController extends Controller
             } elseif (Str::startsWith($user->bot_state, 'awaiting_new_ticket_') || Str::startsWith($user->bot_state, 'awaiting_ticket_reply')) {
                 $this->processTicketConversation($user, $text, $update);
             } elseif (Str::startsWith($user->bot_state, 'awaiting_discount_code|')) {
-                $orderId = Str::after($user->bot_state, 'awaiting_discount_code|');
+                $orderId = (int) Str::after($user->bot_state, 'awaiting_discount_code|');
                 $this->processDiscountCode($user, $orderId, $text);
             }
             elseif (Str::startsWith($user->bot_state, 'awaiting_username_for_order|')) {
-                $planId = Str::after($user->bot_state, 'awaiting_username_for_order|');
+                $planId = (int) Str::after($user->bot_state, 'awaiting_username_for_order|');
                 $this->processUsername($user, $planId, $text);
             }
 
@@ -248,6 +638,13 @@ class WebhookController extends Controller
             case '🧪 اکانت تست':
                 $this->handleTrialRequest($user);
                 break;
+            case '🏢 نمایندگی':
+                $this->handleAgentMenu($user);
+                break;
+            case '🔐 اطلاعات ورود به سایت':
+                $this->sendSiteCredentials($user);
+                break;
+
 
             case '/start':
                 $telegramSettings = TelegramBotSetting::pluck('value', 'key');
@@ -308,7 +705,7 @@ class WebhookController extends Controller
         $this->startPurchaseProcess($user, $planId, $username);
     }
 
-    protected function promptForUsername($user, $planId, $messageId = null, $locationId = null)
+    protected function promptForUsername(User $user, int $planId, ?int $messageId = null, ?int $locationId = null)
     {
         $newState = 'awaiting_username_for_order|' . $planId;
 
@@ -339,7 +736,7 @@ class WebhookController extends Controller
     /**
      * ارسال مجدد لینک اکانت تست (برای کپی آسان)
      */
-    protected function handleTrialCopyLink($user, $messageId = null)
+    protected function handleTrialCopyLink(User $user, ?int $messageId = null)
     {
         try {
             $link = \Illuminate\Support\Facades\Cache::get("trial_link_{$user->id}");
@@ -373,7 +770,7 @@ class WebhookController extends Controller
     /**
      * ارسال QR Code برای اکانت تست
      */
-    protected function sendTrialQRCode($user, $messageId = null)
+    protected function sendTrialQRCode(User $user, ?int $messageId = null)
     {
         try {
             $link = \Illuminate\Support\Facades\Cache::get("trial_link_{$user->id}");
@@ -445,8 +842,22 @@ class WebhookController extends Controller
     protected function handleCallbackQuery($update)
     {
         $callbackQuery = $update->getCallbackQuery();
-        $chatId = $callbackQuery->getMessage()->getChat()->getId();
-        $messageId = $callbackQuery->getMessage()->getMessageId();
+        if (!$callbackQuery) {
+            return;
+        }
+        
+        $message = $callbackQuery->getMessage();
+        if (!$message) {
+            return;
+        }
+        
+        $chat = $message->getChat();
+        if (!$chat) {
+            return;
+        }
+        
+        $chatId = $chat->getId();
+        $messageId = $message->getMessageId();
         $data = $callbackQuery->getData();
         $user = User::where('telegram_chat_id', $chatId)->first();
 
@@ -460,6 +871,11 @@ class WebhookController extends Controller
             return;
         }
 
+        if (!$user) {
+            Telegram::sendMessage(['chat_id' => $chatId, 'text' => $this->escape("❌ کاربر یافت نشد. لطفاً با دستور /start ربات را مجدداً راه‌اندازی کنید."), 'parse_mode' => 'MarkdownV2']);
+            return;
+        }
+
         if (Str::startsWith($data, 'show_duration_')) {
             $durationDays = (int)Str::after($data, 'show_duration_');
             $this->sendPlansByDuration($chatId, $durationDays, $messageId);
@@ -467,13 +883,8 @@ class WebhookController extends Controller
         }
 
         if (Str::startsWith($data, 'show_service_')) {
-            $orderId = Str::after($data, 'show_service_');
+            $orderId = (int) Str::after($data, 'show_service_');
             $this->showServiceDetails($user, $orderId, $messageId);
-            return;
-        }
-
-        if (!$user) {
-            Telegram::sendMessage(['chat_id' => $chatId, 'text' => $this->escape("❌ کاربر یافت نشد. لطفاً با دستور /start ربات را مجدداً راه‌اندازی کنید."), 'parse_mode' => 'MarkdownV2']);
             return;
         }
 
@@ -494,9 +905,18 @@ class WebhookController extends Controller
 
                 if (class_exists('Modules\MultiServer\Models\Location')) {
                     $location = \Modules\MultiServer\Models\Location::find($locationId);
+                    $plan = Plan::find($planId);
+                    $serverType = $plan ? ($plan->server_type ?? 'all') : 'all';
+
                     if ($location) {
-                        $totalCapacity = $location->servers()->where('is_active', true)->sum('capacity');
-                        $totalUsed = $location->servers()->where('is_active', true)->sum('current_users');
+                        $query = $location->servers()->where('is_active', true);
+                        
+                        if ($serverType !== 'all') {
+                            $query->where('type', $serverType);
+                        }
+
+                        $totalCapacity = $query->sum('capacity');
+                        $totalUsed = $query->sum('current_users');
 
                         if ($totalUsed >= $totalCapacity) {
                             $settings = Setting::all()->pluck('value', 'key');
@@ -517,7 +937,7 @@ class WebhookController extends Controller
         }
 
         if (Str::startsWith($data, 'buy_plan_')) {
-            $planId = Str::after($data, 'buy_plan_');
+            $planId = (int) Str::after($data, 'buy_plan_');
 
             $isMultiLocationEnabled = filter_var(
                 $this->settings->get('enable_multilocation', false),
@@ -536,12 +956,12 @@ class WebhookController extends Controller
             $input = Str::after($data, 'pay_wallet_');
             $this->processWalletPayment($user, $input, $messageId);
         } elseif (Str::startsWith($data, 'pay_card_')) {
-            $orderId = Str::after($data, 'pay_card_');
+            $orderId = (int) Str::after($data, 'pay_card_');
             $this->sendCardPaymentInfo($chatId, $orderId, $messageId);
         }
 
         elseif (Str::startsWith($data, 'copy_trial_link_')) {
-            $userId = Str::after($data, 'copy_trial_link_');
+            $userId = (int) Str::after($data, 'copy_trial_link_');
             $this->handleTrialCopyLink($user, $messageId);
         }
         elseif (Str::startsWith($data, 'qr_trial_')) {
@@ -549,42 +969,51 @@ class WebhookController extends Controller
         }
 
         elseif (Str::startsWith($data, 'enter_discount_')) {
-            $orderId = Str::after($data, 'enter_discount_');
+            $orderId = (int) Str::after($data, 'enter_discount_');
             $this->promptForDiscount($user, $orderId, $messageId);
         }
         elseif (Str::startsWith($data, 'copy_link_')) {
-            $orderId = Str::after($data, 'copy_link_');
+            $orderId = (int) Str::after($data, 'copy_link_');
             $this->handleCopyLinkRequest($user, $orderId);
         }
 
         elseif (Str::startsWith($data, 'remove_discount_')) {
-            $orderId = Str::after($data, 'remove_discount_');
+            $orderId = (int) Str::after($data, 'remove_discount_');
             $this->removeDiscount($user, $orderId, $messageId);
         } elseif (Str::startsWith($data, 'qrcode_order_')) {
-            $orderId = Str::after($data, 'qrcode_order_');
+            $orderId = (int) Str::after($data, 'qrcode_order_');
             $this->sendQRCodeForOrder($user, $orderId);
         } elseif (Str::startsWith($data, 'renew_order_')) {
-            $originalOrderId = Str::after($data, 'renew_order_');
+            $originalOrderId = (int) Str::after($data, 'renew_order_');
             $this->startRenewalPurchaseProcess($user, $originalOrderId, $messageId);
         } elseif (Str::startsWith($data, 'renew_pay_wallet_')) {
-            $originalOrderId = Str::after($data, 'renew_pay_wallet_');
+            $originalOrderId = (int) Str::after($data, 'renew_pay_wallet_');
             $this->processRenewalWalletPayment($user, $originalOrderId, $messageId);
         } elseif (Str::startsWith($data, 'renew_pay_card_')) {
-            $originalOrderId = Str::after($data, 'renew_pay_card_');
+            $originalOrderId = (int) Str::after($data, 'renew_pay_card_');
             $this->handleRenewCardPayment($user, $originalOrderId, $messageId);
         } elseif (Str::startsWith($data, 'deposit_amount_')) {
-            $amount = Str::after($data, 'deposit_amount_');
+            $amount = (int) Str::after($data, 'deposit_amount_');
             $this->processDepositAmount($user, $amount, $messageId);
         } elseif ($data === '/deposit_custom') {
             $this->promptForCustomDeposit($user, $messageId);
         } elseif (Str::startsWith($data, 'close_ticket_')) {
-            $ticketId = Str::after($data, 'close_ticket_');
-            $this->closeTicket($user, $ticketId, $messageId, $callbackQuery->getId());
-        } elseif (Str::startsWith($data, 'reply_ticket_')) {
-            $ticketId = Str::after($data, 'reply_ticket_');
+            $ticketId = (int) Str::after($data, 'close_ticket_');
+            $callbackQueryId = $callbackQuery ? $callbackQuery->getId() : null;
+            $this->closeTicket($user, $ticketId, $messageId, $callbackQueryId);
+        }
+
+        elseif (Str::startsWith($data, 'agent_')) {
+            $this->handleAgentCallbacks($user, $data, $messageId);
+        }
+
+        elseif (Str::startsWith($data, 'reply_ticket_')) {
+            $ticketId = (int) Str::after($data, 'reply_ticket_');
             $this->promptForTicketReply($user, $ticketId, $messageId);
         } elseif ($data === '/support_new') {
             $this->promptForNewTicket($user, $messageId);
+        } elseif ($data === 'generate_new_password') {
+            $this->generateNewPassword($user, $messageId);
         } else {
             switch ($data) {
                 case '/start':
@@ -650,20 +1079,332 @@ class WebhookController extends Controller
         }
     }
 
+    /**
+     * Handlerهای مربوط به نمایندگی
+     */
+    protected function handleAgentCallbacks($user, $data, $messageId)
+    {
+        $chatId = $user->telegram_chat_id;
+        $reseller = $user->reseller;
+
+        switch ($data) {
+            case 'agent_check_status':
+                // رفرش وضعیت
+                $this->handleAgentMenu($user);
+                try {
+                    Telegram::deleteMessage(['chat_id' => $chatId, 'message_id' => $messageId]);
+                } catch (\Exception $e) {}
+                break;
+
+            case 'agent_register':
+                // باز کردن مینی‌اپ ثبت نام
+                $this->showAgentRegistration($user);
+                break;
+
+            case 'agent_deposit':
+                // شارژ کیف پول
+                if (!$reseller || $reseller->status !== 'active') {
+                    Telegram::sendMessage([
+                        'chat_id' => $chatId,
+                        'text' => $this->escape('❌ شما نماینده فعال نیستید.'),
+                        'parse_mode' => 'MarkdownV2'
+                    ]);
+                    return;
+                }
+
+                try {
+                    $webAppUrl = route('webapp.agent.deposit');
+                } catch (\Exception $e) {
+                    $webAppUrl = config('app.url') . '/agent/deposit';
+                }
+
+                $keyboard = Keyboard::make()->inline()
+                    ->row([Keyboard::inlineButton(['text' => '💳 ورود به صفحه شارژ', 'web_app' => ['url' => $webAppUrl]])])
+                    ->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت', 'callback_data' => 'agent_back_to_dashboard'])]);
+
+                Telegram::sendMessage([
+                    'chat_id' => $chatId,
+                    'text' => $this->escape('💰 شارژ کیف پول نمایندگی\n\nاز طریق لینک زیر اقدام کنید:'),
+                    'parse_mode' => 'MarkdownV2',
+                    'reply_markup' => $keyboard
+                ]);
+                break;
+
+            case 'agent_buy_server':
+                // خرید سرور
+                if (!$reseller || $reseller->status !== 'active') {
+                    Telegram::sendMessage([
+                        'chat_id' => $chatId,
+                        'text' => $this->escape('❌ شما نماینده فعال نیستید.'),
+                        'parse_mode' => 'MarkdownV2'
+                    ]);
+                    return;
+                }
+
+                try {
+                    $webAppUrl = route('webapp.agent.buy-server');
+                } catch (\Exception $e) {
+                    $webAppUrl = config('app.url') . '/agent/buy-server';
+                }
+
+                $message = "🖥 *خرید سرور اختصاصی*\n\n";
+                $message .= "موجودی فعلی: " . number_format($reseller->wallet ? $reseller->wallet->balance : 0) . " تومان\n\n";
+                $message .= "پلن‌های موجود:\n";
+                $message .= "• سرور ۱۰۰ نفره: ۵۰۰,۰۰۰ تومان\n";
+                $message .= "• سرور ۲۰۰ نفره: ۹۰۰,۰۰۰ تومان\n";
+                $message .= "• سرور ۵۰۰ نفره: ۲,۰۰۰,۰۰۰ تومان\n\n";
+                $message .= "برای خرید وارد لینک زیر شوید:";
+
+                $keyboard = Keyboard::make()->inline()
+                    ->row([Keyboard::inlineButton(['text' => '🖥 ورود به صفحه خرید سرور', 'web_app' => ['url' => $webAppUrl]])])
+                    ->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت', 'callback_data' => 'agent_back_to_dashboard'])]);
+
+                Telegram::sendMessage([
+                    'chat_id' => $chatId,
+                    'text' => $this->escape($message),
+                    'parse_mode' => 'MarkdownV2',
+                    'reply_markup' => $keyboard
+                ]);
+                break;
+
+            case 'agent_create_account':
+                // ساخت اکانت جدید (مستقیم یا از طریق مینی‌اپ)
+                if (!$reseller || $reseller->status !== 'active') {
+                    Telegram::sendMessage([
+                        'chat_id' => $chatId,
+                        'text' => $this->escape('❌ شما نماینده فعال نیستید.'),
+                        'parse_mode' => 'MarkdownV2'
+                    ]);
+                    return;
+                }
+
+                if ($reseller->accounts()->count() >= $reseller->max_accounts && $reseller->servers()->where('is_active', true)->count() === 0) {
+                    Telegram::sendMessage([
+                        'chat_id' => $chatId,
+                        'text' => $this->escape('⚠️ ظرفیت اکانت‌های شما تکمیل است!\n\nبرای ساخت اکانت بیشتر، ابتدا سرور خریداری کنید.'),
+                        'parse_mode' => 'MarkdownV2',
+                        'reply_markup' => Keyboard::make()->inline()
+                            ->row([Keyboard::inlineButton(['text' => '🖥 خرید سرور', 'callback_data' => 'agent_buy_server'])])
+                            ->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت', 'callback_data' => 'agent_back_to_dashboard'])])
+                    ]);
+                    return;
+                }
+
+                // اینجا می‌تونی مستقیم فرآیند ساخت اکانت رو شروع کنی
+                // یا کاربر رو به مینی‌اپ هدایت کنی
+                $this->startAgentAccountCreation($user, $reseller, $messageId);
+                break;
+
+            case 'agent_reports':
+                // نمایش گزارشات
+                $this->showAgentReports($reseller, $chatId, $messageId);
+                break;
+
+            case 'agent_back_to_dashboard':
+                // بازگشت به داشبورد
+                try {
+                    Telegram::deleteMessage(['chat_id' => $chatId, 'message_id' => $messageId]);
+                } catch (\Exception $e) {}
+                $this->showAgentDashboard($reseller, $user);
+                break;
+
+            default:
+                if (Str::startsWith($data, 'agent_select_server_')) {
+                    $serverId = (int) Str::after($data, 'agent_select_server_');
+                    $this->processAgentServerSelection($user, $reseller, $serverId, $messageId);
+                }
+                break;
+        }
+    }
+
+    /**
+     * شروع فرآیند ساخت اکانت برای نماینده
+     */
+    protected function startAgentAccountCreation($user, $reseller, $messageId)
+    {
+        $chatId = $user->telegram_chat_id;
+
+        // گرفتن سرورهای فعال نماینده
+        $servers = $reseller->servers()->where('is_active', true)->get();
+
+        if ($servers->isEmpty()) {
+            // استفاده از سرورهای اصلی سیستم (با قیمت نمایندگی)
+            $this->sendPlans($chatId, $messageId, true); // true = isAgentMode
+            return;
+        }
+
+        // نمایش لیست سرورهای خود نماینده
+        $message = "🖥 *انتخاب سرور*\n\n";
+        $message .= "لطفاً سرور مورد نظر برای ساخت اکانت را انتخاب کنید:\n\n";
+
+        $keyboard = Keyboard::make()->inline();
+
+        foreach ($servers as $server) {
+            $available = $server->capacity - $server->current_users;
+            $status = $available > 0 ? "🟢 {$available} ظرفیت" : "🔴 تکمیل";
+
+            $message .= "• {$server->name}: {$status}\n";
+
+            $keyboard->row([
+                Keyboard::inlineButton([
+                    'text' => $server->name . ' (' . $status . ')',
+                    'callback_data' => 'agent_select_server_' . $server->id
+                ])
+            ]);
+        }
+
+        $message .= "\n💰 هزینه هر اکانت: " . number_format($reseller->plan ? $reseller->plan->price_per_account : 30000) . " تومان";
+        $message .= "\n💳 موجودی: " . number_format($reseller->wallet ? $reseller->wallet->balance : 0) . " تومان";
+
+        $keyboard->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت', 'callback_data' => 'agent_back_to_dashboard'])]);
+
+        $this->sendOrEditMessage($chatId, $message, $keyboard, $messageId);
+    }
+
+    /**
+     * پردازش انتخاب سرور برای نماینده
+     */
+    protected function processAgentServerSelection(User $user, Reseller $reseller, int $serverId, int $messageId)
+    {
+        $chatId = $user->telegram_chat_id;
+        
+        // بررسی اینکه سرور متعلق به نماینده هست یا نه
+        $server = $reseller->servers()->find($serverId);
+        
+        if (!$server) {
+            $message = "❌ *سرور نامعتبر*\n\n";
+            $message .= "این سرور یا وجود ندارد یا به شما تعلق ندارد.";
+            
+            $keyboard = Keyboard::make()->inline()
+                ->row([Keyboard::inlineButton(['text' => '🔄 تلاش مجدد', 'callback_data' => 'agent_create_account'])])
+                ->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت', 'callback_data' => 'agent_back_to_dashboard'])]);
+            
+            $this->sendOrEditMessage($chatId, $message, $keyboard, $messageId);
+            return;
+        }
+        
+        // بررسی ظرفیت سرور
+        $currentAccounts = $reseller->accounts()->where('server_id', $serverId)->count();
+        $maxCapacity = $server->max_accounts_per_reseller ?? 50;
+        
+        if ($currentAccounts >= $maxCapacity) {
+            $message = "❌ *ظرفیت سرور تکمیل شده*\n\n";
+            $message .= "ظرفیت این سرور برای نمایندگان تکمیل شده است.\n";
+            $message .= "لطفاً سرور دیگری انتخاب کنید.";
+            
+            $keyboard = Keyboard::make()->inline()
+                ->row([Keyboard::inlineButton(['text' => '🔄 انتخاب سرور دیگر', 'callback_data' => 'agent_create_account'])])
+                ->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت', 'callback_data' => 'agent_back_to_dashboard'])]);
+            
+            $this->sendOrEditMessage($chatId, $message, $keyboard, $messageId);
+            return;
+        }
+        
+        // محاسبه هزینه
+        $plan = $reseller->plan;
+        $costPerAccount = $plan ? $plan->price_per_account : 30000;
+        $currentBalance = $reseller->wallet ? $reseller->wallet->balance : 0;
+        
+        if ($currentBalance < $costPerAccount) {
+            $message = "❌ *موجودی کافی نیست*\n\n";
+            $message .= "هزینه ساخت اکانت: *" . number_format($costPerAccount) . " تومان*\n";
+            $message .= "موجودی فعلی: *" . number_format($currentBalance) . " تومان*\n\n";
+            $message .= "لطفاً ابتدا کیف پول خود را شارژ کنید.";
+            
+            $keyboard = Keyboard::make()->inline()
+                ->row([Keyboard::inlineButton(['text' => '💳 شارژ کیف پول', 'callback_data' => 'agent_deposit'])])
+                ->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت', 'callback_data' => 'agent_back_to_dashboard'])]);
+            
+            $this->sendOrEditMessage($chatId, $message, $keyboard, $messageId);
+            return;
+        }
+        
+        // نمایش اطلاعات برای تایید نهایی
+        $message = "✅ *تایید ساخت اکانت*\n\n";
+        $message .= "🖥 سرور: *{$server->name}*\n";
+        $message .= "📍 موقعیت: *{$server->location}*\n";
+        $message .= "💰 هزینه: *" . number_format($costPerAccount) . " تومان*\n";
+        $message .= "💳 موجودی پس از کسر: *" . number_format($currentBalance - $costPerAccount) . " تومان*\n\n";
+        $message .= "آیا از ساخت اکانت اطمینان دارید؟";
+        
+        $keyboard = Keyboard::make()->inline()
+            ->row([Keyboard::inlineButton(['text' => '✅ تایید و ساخت', 'callback_data' => 'agent_confirm_create_' . $serverId])])
+            ->row([Keyboard::inlineButton(['text' => '❌ انصراف', 'callback_data' => 'agent_back_to_dashboard'])]);
+        
+        $this->sendOrEditMessage($chatId, $message, $keyboard, $messageId);
+    }
+
+    /**
+     * 📊 نمایش گزارشات نماینده
+     */
+    protected function showAgentReports(Reseller $reseller, int $chatId, int $messageId)
+    {
+        $totalAccounts = $reseller->accounts()->count();
+        $activeAccounts = $reseller->accounts()->where('status', 'active')->count();
+        $expiredAccounts = $reseller->accounts()->where('status', 'expired')->count();
+        $totalRevenue = $reseller->transactions()
+            ->where('type', 'purchase')
+            ->sum('amount');
+        $currentBalance = $reseller->wallet ? $reseller->wallet->balance : 0;
+        
+        $message = "📊 *گزارشات نمایندگی*\n\n";
+        $message .= "👤 نماینده: {$reseller->user->name}\n";
+        $message .= "📅 تاریخ گزارش: " . now()->format('Y/m/d') . "\n\n";
+        $message .= "📈 *آمار کل:*\n";
+        $message .= "• کل اکانت‌ها: *{$totalAccounts}*\n";
+        $message .= "• اکانت‌های فعال: *{$activeAccounts}*\n";
+        $message .= "• اکانت‌های منقضی: *{$expiredAccounts}*\n\n";
+        $message .= "💰 *مالی:*\n";
+        $message .= "• درآمد کل: *" . number_format($totalRevenue) . " تومان*\n";
+        $message .= "• موجودی فعلی: *" . number_format($currentBalance) . " تومان*\n\n";
+        $message .= "📊 *عملکرد:*\n";
+        
+        if ($totalAccounts > 0) {
+            $activePercentage = round(($activeAccounts / $totalAccounts) * 100);
+            $message .= "• نرخ فعال بودن: *{$activePercentage}%*\n";
+        }
+        
+        $message .= "\n_برای مشاهده جزئیات بیشتر به پنل نمایندگی مراجعه کنید._";
+
+        $keyboard = Keyboard::make()->inline()
+            ->row([Keyboard::inlineButton(['text' => '🔄 بروزرسانی گزارش', 'callback_data' => 'agent_reports'])])
+            ->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت به داشبورد', 'callback_data' => 'agent_back_to_dashboard'])]);
+
+        $this->sendOrEditMessage($chatId, $message, $keyboard, $messageId);
+    }
+
     protected function promptForLocation($user, $planId, $messageId)
     {
+        $plan = Plan::find($planId);
+        $serverType = $plan ? ($plan->server_type ?? 'all') : 'all';
+
         $settings = Setting::all()->pluck('value', 'key');
         $showCapacity = filter_var($settings->get('ms_show_capacity', true), FILTER_VALIDATE_BOOLEAN);
         $hideFull = filter_var($settings->get('ms_hide_full_locations', false), FILTER_VALIDATE_BOOLEAN);
 
-        $locations = \Modules\MultiServer\Models\Location::where('is_active', true)->with('servers')->get();
+        // ✅ فیلتر کردن سرورها بر اساس نوع پلن
+        $locations = \Modules\MultiServer\Models\Location::where('is_active', true)
+            ->with(['servers' => function ($query) use ($serverType) {
+                $query->where('is_active', true);
+                if ($serverType !== 'all') {
+                    $query->where('type', $serverType);
+                }
+            }])
+            ->get();
 
         $keyboard = Keyboard::make()->inline();
         $hasAvailableLocation = false;
 
         foreach ($locations as $loc) {
-            $totalCapacity = $loc->servers->where('is_active', true)->sum('capacity');
-            $totalUsed = $loc->servers->where('is_active', true)->sum('current_users');
+            // ✅ استفاده از سرورهای فیلتر شده
+            $relevantServers = $loc->servers;
+
+            if ($relevantServers->isEmpty()) {
+                continue;
+            }
+
+            $totalCapacity = $relevantServers->sum('capacity');
+            $totalUsed = $relevantServers->sum('current_users');
             $remained = max(0, $totalCapacity - $totalUsed);
             $isFull = $remained <= 0;
 
@@ -706,7 +1447,16 @@ class WebhookController extends Controller
     protected function handlePhotoMessage($update)
     {
         $message = $update->getMessage();
-        $chatId = $message->getChat()->getId();
+        if (!$message) {
+            return;
+        }
+        
+        $chat = $message->getChat();
+        if (!$chat) {
+            return;
+        }
+        
+        $chatId = $chat->getId();
         $user = User::where('telegram_chat_id', $chatId)->first();
 
         if ($user && !$this->isUserMemberOfChannel($user)) {
@@ -726,7 +1476,7 @@ class WebhookController extends Controller
         }
 
         if (Str::startsWith($user->bot_state, 'waiting_receipt_')) {
-            $orderId = Str::after($user->bot_state, 'waiting_receipt_');
+            $orderId = (int) Str::after($user->bot_state, 'waiting_receipt_');
             $order = Order::find($orderId);
 
             if ($order && $order->user_id === $user->id && $order->status === 'pending') {
@@ -801,22 +1551,56 @@ class WebhookController extends Controller
             }
 
             if ($locationId) {
-                // پیدا کردن خلوت‌ترین سرور فعال
-                $bestServer = \Modules\MultiServer\Models\Server::where('location_id', $locationId)
+                $serverType = $plan->server_type ?? 'all';
+
+                // پیدا کردن خلوت‌ترین سرور فعال با توجه به نوع پلن
+                $query = \Modules\MultiServer\Models\Server::where('location_id', $locationId)
                     ->where('is_active', true)
-                    ->whereRaw('current_users < capacity')
-                    ->orderBy('current_users', 'asc')
-                    ->first();
+                    ->whereRaw('current_users < capacity');
+                
+                if ($serverType !== 'all') {
+                    $query->where('type', $serverType);
+                }
+
+                $bestServer = $query->orderBy('current_users', 'asc')->first();
 
                 if ($bestServer) {
                     $serverId = $bestServer->id;
                 } else {
-                    $user->update(['bot_state' => null]);
-                    Telegram::sendMessage([
-                        'chat_id' => $user->telegram_chat_id,
-                        'text' => $this->escape("❌ متأسفانه ظرفیت سرورهای این لوکیشن تکمیل شده است."),
-                        'parse_mode' => 'MarkdownV2'
-                    ]);
+                    // اگر در لوکیشن انتخابی سروری نبود، سعی کن از هر لوکیشنی یک سرور مناسب پیدا کنی
+                    $fallbackQuery = \Modules\MultiServer\Models\Server::where('is_active', true)
+                        ->whereRaw('current_users < capacity');
+                    if ($serverType !== 'all') {
+                        $fallbackQuery->where('type', $serverType);
+                    }
+                    $fallbackServer = $fallbackQuery->orderBy('current_users', 'asc')->first();
+                    
+                    if ($fallbackServer) {
+                        $serverId = $fallbackServer->id;
+                    } else {
+                        $user->update(['bot_state' => null]);
+                        Telegram::sendMessage([
+                            'chat_id' => $user->telegram_chat_id,
+                            'text' => $this->escape("❌ متأسفانه ظرفیت تمام سرورها تکمیل شده است."),
+                            'parse_mode' => 'MarkdownV2'
+                        ]);
+                        return;
+                    }
+                }
+            } else {
+                // اگر لوکیشن انتخاب نشده بود (مثلاً state پاک شده)، سعی کن بهترین سرور را پیدا کنی
+                $serverType = $plan->server_type ?? 'all';
+                $fallbackQuery = \Modules\MultiServer\Models\Server::where('is_active', true)
+                    ->whereRaw('current_users < capacity');
+                if ($serverType !== 'all') {
+                    $fallbackQuery->where('type', $serverType);
+                }
+                $fallbackServer = $fallbackQuery->orderBy('current_users', 'asc')->first();
+
+                if ($fallbackServer) {
+                    $serverId = $fallbackServer->id;
+                } else {
+                    $this->sendOrEditMainMenu($user->telegram_chat_id, "❌ لطفاً ابتدا لوکیشن را انتخاب کنید.", $messageId);
                     return;
                 }
             }
@@ -840,6 +1624,11 @@ class WebhookController extends Controller
     protected function showInvoice($user, Order $order, $messageId = null)
     {
         $plan = $order->plan;
+        if (!$plan) {
+            $this->sendOrEditMainMenu($user->telegram_chat_id, "❌ اطلاعات سفارش نامعتبر است.");
+            return;
+        }
+        
         $balance = $user->balance ?? 0;
 
         $message = "🛒 *تایید خرید*\n\n";
@@ -957,7 +1746,7 @@ class WebhookController extends Controller
 
                 // تشخیص سفارش موجود یا ساخت سفارش جدید
                 if (Str::startsWith($input, 'order_')) {
-                    $orderId = Str::after($input, 'order_');
+                    $orderId = (int) Str::after($input, 'order_');
                     $order = Order::where('id', $orderId)
                         ->where('user_id', $lockedUser->id)
                         ->where('status', 'pending')
@@ -1043,7 +1832,11 @@ class WebhookController extends Controller
             });
 
             // ارسال پیام موفقیت (خارج از تراکنش)
-            // ✅ اصلاح: حالا $order و $plan در دسترس هستند چون با & پاس شده‌اند
+            // اطمینان از در دسترس بودن سفارش و پلن
+            if (!$order || !$plan) {
+                throw new \RuntimeException('Order or plan not available after wallet payment processing.');
+            }
+
             $link = $order->config_details;
 
             // بارگذاری اطلاعات کامل سفارش
@@ -1064,12 +1857,15 @@ class WebhookController extends Controller
 
             // ساخت پیام کامل
             $message = "✅ *خرید موفق!*\n\n";
-            $message .= "📦 *پلن:* `{$this->escape($order->plan->name)}`\n";
+            $message .= "📦 *پلن:* `{$this->escape($plan->name)}`\n";
             $message .= "🌍 *موقعیت:* {$locationFlag} {$this->escape($locationName)}\n";
             $message .= "🖥 *سرور:* {$this->escape($serverName)}\n";
-            $message .= "💾 *حجم:* {$order->plan->volume_gb} گیگابایت\n";
-            $message .= "📅 *مدت:* {$order->plan->duration_days} روز\n";
-            $message .= "⏳ *انقضا:* `{$order->expires_at->format('Y/m/d H:i')}`\n";
+            $message .= "💾 *حجم:* {$plan->volume_gb} گیگابایت\n";
+            $message .= "📅 *مدت:* {$plan->duration_days} روز\n";
+
+            $expiresAt = $order->expires_at;
+            $expiresText = $expiresAt ? $expiresAt->format('Y/m/d H:i') : '-';
+            $message .= "⏳ *انقضا:* `{$expiresText}`\n";
             $message .= "👤 *یوزرنیم:* `{$order->panel_username}`\n\n";
             $message .= "🔗 *لینک کانفیگ شما:*\n";
             $message .= "`{$link}`\n\n";
@@ -1147,16 +1943,24 @@ class WebhookController extends Controller
                 if (!empty($matches[1])) {
                     $locationId = (int) $matches[1];
 
-
                     if (class_exists('Modules\MultiServer\Models\Server')) {
-                        $bestServer = \Modules\MultiServer\Models\Server::where('location_id', $locationId)
+                        // ✅ اصلاح: فیلتر کردن بر اساس نوع سرور پلن
+                        $plan = $order->plan;
+                        $serverType = $plan ? ($plan->server_type ?? 'all') : 'all';
+
+                        $query = \Modules\MultiServer\Models\Server::where('location_id', $locationId)
                             ->where('is_active', true)
-                            ->whereRaw('current_users < capacity')
-                            ->orderBy('current_users', 'asc')
-                            ->first();
+                            ->whereRaw('current_users < capacity');
+                        
+                        if ($serverType !== 'all') {
+                            $query->where('type', $serverType);
+                        }
+
+                        $bestServer = $query->orderBy('current_users', 'asc')->first();
 
                         if ($bestServer) {
                             $order->update(['server_id' => $bestServer->id]);
+                            Log::info("Fixed missing server_id for order #{$order->id} with server #{$bestServer->id} ({$bestServer->type})");
                         }
                     }
                 }
@@ -1744,6 +2548,7 @@ class WebhookController extends Controller
     {
         $settings = $this->settings;
         $uniqueUsername = $order->panel_username ?? "user-{$order->user_id}-order-{$order->id}";
+        $expiresAt = $order->expires_at ? Carbon::parse($order->expires_at) : null;
         $configData = [
             'link' => null,
             'username' => null,
@@ -1771,15 +2576,25 @@ class WebhookController extends Controller
             $targetServer = \Modules\MultiServer\Models\Server::find($order->server_id);
             if ($targetServer && $targetServer->is_active) {
                 $isMultiServer = true;
-                $panelType = 'xui';
+                $panelType = $targetServer->type ?? 'xui';
+                
+                // X-UI credentials
                 $xuiHost = $targetServer->full_host;
                 $xuiUser = $targetServer->username;
                 $xuiPass = $targetServer->password;
                 $inboundId = $targetServer->inbound_id;
 
+                // Marzban credentials
+                $marzbanHost = $targetServer->full_host;
+                $marzbanUser = $targetServer->username;
+                $marzbanPass = $targetServer->password;
+                // Use node hostname if set, otherwise fallback to panel host
+                $marzbanNode = $targetServer->marzban_node_hostname ?? $marzbanHost;
+
                 Log::info("🚀 Provisioning on MultiServer", [
                     'server_name' => $targetServer->name,
                     'server_id' => $targetServer->id,
+                    'type' => $panelType,
                     'host' => parse_url($xuiHost, PHP_URL_HOST),
                     'link_type' => $targetServer->link_type ?? 'not set'
                 ]);
@@ -1790,22 +2605,31 @@ class WebhookController extends Controller
             // ==========================================
             // پنل MARZBAN
             // ==========================================
-            if ($panelType === 'marzban' && !$isMultiServer) {
-                $marzban = new MarzbanService(
-                    $settings->get('marzban_host'),
-                    $settings->get('marzban_sudo_username'),
-                    $settings->get('marzban_sudo_password'),
-                    $settings->get('marzban_node_hostname')
-                );
+            if ($panelType === 'marzban') {
+                if ($isMultiServer) {
+                    $marzban = new MarzbanService(
+                        $marzbanHost ?? '',
+                        $marzbanUser ?? '',
+                        $marzbanPass ?? '',
+                        $marzbanNode ?? ''
+                    );
+                } else {
+                    $marzban = new MarzbanService(
+                        $settings->get('marzban_host') ?? '',
+                        $settings->get('marzban_sudo_username') ?? '',
+                        $settings->get('marzban_sudo_password') ?? '',
+                        $settings->get('marzban_node_hostname') ?? ''
+                    );
+                }
+                
                 $response = $marzban->createUser([
                     'username' => $uniqueUsername,
-                    'proxies' => (object) [],
-                    'expire' => $order->expires_at->timestamp,
+                    'expire' => $expiresAt ? $expiresAt->getTimestamp() : null,
                     'data_limit' => $plan->volume_gb * 1024 * 1024 * 1024,
                 ]);
 
                 if (!empty($response['subscription_url'])) {
-                    $configData['link'] = $response['subscription_url'];
+                    $configData['link'] = $marzban->generateSubscriptionLink($response);
                     $configData['username'] = $uniqueUsername;
                 } else {
                     Log::error('Marzban user creation failed.', ['response' => $response]);
@@ -1852,7 +2676,7 @@ class WebhookController extends Controller
                 $clientData = [
                     'email' => $uniqueUsername,
                     'total' => $plan->volume_gb * 1024 * 1024 * 1024,
-                    'expiryTime' => $order->expires_at->timestamp * 1000,
+                    'expiryTime' => $expiresAt ? $expiresAt->getTimestamp() * 1000 : null,
                 ];
 
                 if ($linkType === 'subscription') {
@@ -2532,7 +3356,7 @@ class WebhookController extends Controller
                 Telegram::sendMessage(['chat_id' => $chatId, 'text' => $this->escape("✅ موضوع دریافت شد.\n\nحالا *متن پیام* خود را وارد کنید (می‌توانید همراه پیام، عکس هم ارسال کنید):"), 'parse_mode' => 'MarkdownV2']);
 
             } elseif (Str::startsWith($state, 'awaiting_new_ticket_message|')) {
-                $subject = Str::after($state, 'awaiting_new_ticket_message|');
+                $subject = Str::after($state, 'awaiting_new_ticket_message|'); // This one is string, not int
                 $isPhotoOnly = $update->getMessage()->has('photo') && (empty(trim($text)) || $text === '[📎 فایل پیوست شد]');
                 $messageText = $isPhotoOnly ? '[📎 پیوست تصویر]' : $text;
 
@@ -2561,7 +3385,7 @@ class WebhookController extends Controller
                 event(new TicketCreated($ticket));
 
             } elseif (Str::startsWith($state, 'awaiting_ticket_reply|')) {
-                $ticketId = Str::after($state, 'awaiting_ticket_reply|');
+                $ticketId = (int) Str::after($state, 'awaiting_ticket_reply|');
                 $ticket = $user->tickets()->find($ticketId);
 
                 if (!$ticket) {
@@ -2708,6 +3532,12 @@ class WebhookController extends Controller
         // بارگذاری اطلاعات کامل سفارش
         $order->load(['server.location', 'plan']);
 
+        $plan = $order->plan;
+        if (!$plan) {
+            $this->sendOrEditMainMenu($user->telegram_chat_id, "❌ اطلاعات سفارش نامعتبر است.", $messageId);
+            return;
+        }
+
         $link = $order->config_details;
 
         // آماده‌سازی اطلاعات سرور و کشور
@@ -2725,12 +3555,15 @@ class WebhookController extends Controller
 
         // ساخت پیام کامل و خفن
         $message = "✅ *خرید موفق!*\n\n";
-        $message .= "📦 *پلن:* `{$this->escape($order->plan->name)}`\n";
+        $message .= "📦 *پلن:* `{$this->escape($plan->name)}`\n";
         $message .= "🌍 *موقعیت:* {$locationFlag} {$this->escape($locationName)}\n";
         $message .= "🖥 *سرور:* {$this->escape($serverName)}\n";
-        $message .= "💾 *حجم:* {$order->plan->volume_gb} گیگابایت\n";
-        $message .= "📅 *مدت:* {$order->plan->duration_days} روز\n";
-        $message .= "⏳ *انقضا:* `{$order->expires_at->format('Y/m/d H:i')}`\n";
+        $message .= "💾 *حجم:* {$plan->volume_gb} گیگابایت\n";
+        $message .= "📅 *مدت:* {$plan->duration_days} روز\n";
+
+        $expiresAt = $order->expires_at ? Carbon::parse($order->expires_at) : null;
+        $expiresText = $expiresAt ? $expiresAt->format('Y/m/d H:i') : '-';
+        $message .= "⏳ *انقضا:* `{$expiresText}`\n";
         $message .= "👤 *یوزرنیم:* `{$order->panel_username}`\n\n";
         $message .= "🔗 *لینک کانفیگ شما:*\n";
         $message .= "`{$link}`\n\n";
@@ -2779,7 +3612,17 @@ class WebhookController extends Controller
 
     protected function savePhotoAttachment($update, $directory)
     {
-        $photo = collect($update->getMessage()->getPhoto())->last();
+        $message = $update->getMessage();
+        if (!$message) {
+            return null;
+        }
+        
+        $photos = $message->getPhoto();
+        if (!$photos) {
+            return null;
+        }
+        
+        $photo = collect($photos)->last();
         if(!$photo) return null;
 
         $botToken = $this->settings->get('telegram_bot_token');
@@ -3119,7 +3962,7 @@ class WebhookController extends Controller
             ]);
         }
     }
-    protected function sendOrEditMessage($chatId, $text, $keyboard, $messageId = null)
+    protected function sendOrEditMessage(int $chatId, string $text, $keyboard, ?int $messageId = null)
     {
         $payload = [
             'chat_id'      => $chatId,
@@ -3207,6 +4050,7 @@ class WebhookController extends Controller
             ['💰 کیف پول', '📜 تاریخچه تراکنش‌ها'],
             ['💬 پشتیبانی', '🎁 دعوت از دوستان'],
             ['📚 راهنمای اتصال', '🧪 اکانت تست'],
+            ['🏢 نمایندگی', '🔐 اطلاعات ورود به سایت'],
         ];
 
         if ($webAppUrl) {

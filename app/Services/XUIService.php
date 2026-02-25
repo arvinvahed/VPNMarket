@@ -102,6 +102,17 @@ class XUIService
         }
     }
 
+    public function checkClientExists(int $inboundId, string $email): bool
+    {
+        $clients = $this->getClients($inboundId);
+        foreach ($clients as $client) {
+            if (isset($client['email']) && $client['email'] === $email) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public function login(): bool
     {
         if ($this->isLoggedIn) {

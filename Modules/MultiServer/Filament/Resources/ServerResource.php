@@ -25,18 +25,30 @@ class ServerResource extends Resource
         return $form
             ->schema([
                 Forms\Components\Section::make('اطلاعات اتصال پنل')
-                    ->description('اطلاعات ورود به پنل سنایی/X-UI سرور مقصد را وارد کنید.')
+                    ->description('اطلاعات ورود به پنل سنایی/X-UI یا مرزبان سرور مقصد را وارد کنید.')
                     ->schema([
-                        Forms\Components\Select::make('location_id')
-                            ->relationship('location', 'name')
-                            ->label('لوکیشن (کشور)')
-                            ->preload()
-                            ->createOptionForm([
-                                Forms\Components\TextInput::make('name')->required()->label('نام کشور'),
-                                Forms\Components\TextInput::make('slug')->required()->label('شناسه'),
-                                Forms\Components\TextInput::make('flag')->label('پرچم'),
-                            ])
-                            ->required(),
+                        Forms\Components\Grid::make(2)->schema([
+                            Forms\Components\Select::make('location_id')
+                                ->relationship('location', 'name')
+                                ->label('لوکیشن (کشور)')
+                                ->preload()
+                                ->createOptionForm([
+                                    Forms\Components\TextInput::make('name')->required()->label('نام کشور'),
+                                    Forms\Components\TextInput::make('slug')->required()->label('شناسه'),
+                                    Forms\Components\TextInput::make('flag')->label('پرچم'),
+                                ])
+                                ->required(),
+
+                            Forms\Components\Select::make('type')
+                                ->label('نوع پنل')
+                                ->options([
+                                    'xui' => 'X-UI / Sanaei',
+                                    'marzban' => 'Marzban',
+                                ])
+                                ->default('xui')
+                                ->required()
+                                ->live(),
+                        ]),
 
                         Forms\Components\TextInput::make('name')
                             ->label('نام سرور')
@@ -52,8 +64,8 @@ class ServerResource extends Resource
                             Forms\Components\TextInput::make('port')
                                 ->label('پورت پنل')
                                 ->numeric()
-                                ->required()
-                                ->default(54321),
+                                ->placeholder('پیش‌فرض: 80/443')
+                                ->helperText('اگر خالی باشد، پورت پیش‌فرض (۸۰ یا ۴۴۳) استفاده می‌شود.'),
                         ]),
 
                         Forms\Components\Grid::make(2)->schema([
@@ -79,12 +91,19 @@ class ServerResource extends Resource
                             ->default(false)
                             ->inline(false),
 
+                        Forms\Components\TextInput::make('marzban_node_hostname')
+                            ->label('هاست نیم نود (Node Hostname)')
+                            ->placeholder('مثال: node1.example.com')
+                            ->helperText('فقط در صورت نیاز به ساخت کاربر روی نود خاص (اختیاری)')
+                            ->visible(fn (Forms\Get $get) => $get('type') === 'marzban'),
+
                         // ====================================================
                         // 🚀 انتخاب هوشمند اینباند (روش جدید و تضمینی)
                         // ====================================================
                         Forms\Components\TextInput::make('inbound_id')
+                            ->visible(fn (Forms\Get $get) => $get('type') === 'xui')
                             ->label('شناسه اینباند (Inbound ID)')
-                            ->required()
+                            ->required(fn (Forms\Get $get) => $get('type') === 'xui')
                             ->numeric()
                             ->helperText('برای دریافت لیست، دکمه سمت چپ را بزنید.')
                             ->suffixAction(
@@ -266,6 +285,16 @@ class ServerResource extends Resource
                     ->searchable()
                     ->sortable(),
 
+                Tables\Columns\TextColumn::make('type')
+                    ->label('نوع پنل')
+                    ->badge()
+                    ->color(fn (string $state): string => match ($state) {
+                        'xui' => 'primary',
+                        'marzban' => 'warning',
+                        default => 'gray',
+                    })
+                    ->sortable(),
+
                 Tables\Columns\TextColumn::make('location.name')
                     ->label('لوکیشن')
                     ->badge()
@@ -281,15 +310,8 @@ class ServerResource extends Resource
                     ->color(fn (string $state): string => match ($state) {
                         'single' => 'gray',
                         'subscription' => 'success',
-                    }),
-
-                Tables\Columns\TextColumn::make('link_type')
-                    ->label('نوع لینک')
-                    ->badge()
-                    ->color(fn (string $state): string => match ($state) {
-                        'single' => 'gray',
-                        'subscription' => 'success',
                         'tunnel' => 'warning',
+                        default => 'gray',
                     }),
 
 
@@ -327,13 +349,13 @@ class ServerResource extends Resource
     {
         try {
             $settings = \App\Models\Setting::all()->pluck('value', 'key');
-            $panelType = $settings->get('panel_type');
             $isMultiEnabled = filter_var(
                 $settings->get('enable_multilocation', false),
                 FILTER_VALIDATE_BOOLEAN
             );
 
-            return $panelType === 'xui' && $isMultiEnabled;
+            // Show if Multi-Location is enabled, regardless of panel type
+            return $isMultiEnabled;
         } catch (\Exception $e) {
             return false;
         }

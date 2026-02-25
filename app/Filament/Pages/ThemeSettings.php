@@ -5,6 +5,8 @@ namespace App\Filament\Pages;
 use App\Models\Inbound;
 use App\Models\Setting;
 use Filament\Forms\Components\FileUpload;
+use Filament\Forms\Components\Hidden;
+use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Radio;
 use Filament\Forms\Components\Section;
 use Filament\Forms\Components\Select;
@@ -56,6 +58,7 @@ class ThemeSettings extends Page implements HasForms
             'marzban_host' => null,
             'marzban_sudo_username' => null,
             'marzban_sudo_password' => null,
+            'site_login_url' => null,
         ], $settings));
     }
 
@@ -143,7 +146,9 @@ class ThemeSettings extends Page implements HasForms
                     ]),
 
                     Tabs\Tab::make('محتوای صفحات ورود')->icon('heroicon-o-key')->schema([
-                        Section::make('متن‌های عمومی')->schema([TextInput::make('auth_brand_name')->label('نام برند')->placeholder('VPNMarket'),]),
+                        Section::make('متن‌های عمومی')->schema([
+                            TextInput::make('auth_brand_name')->label('نام برند')->placeholder('VPNMarket'),
+                        ]),
                         Section::make('صفحه ورود (Login)')->schema([
                             TextInput::make('auth_login_title')->label('عنوان فرم ورود'),
                             TextInput::make('auth_login_email_placeholder')->label('متن داخل فیلد ایمیل'),
@@ -165,98 +170,18 @@ class ThemeSettings extends Page implements HasForms
                     Tabs\Tab::make('تنظیمات پنل V2Ray')
                         ->icon('heroicon-o-server-stack')
                         ->schema([
-                            Radio::make('panel_type')
-                                ->label('نوع پنل')
-                                ->options([
-                                    'marzban' => 'مرزبان',
-                                    'xui' => 'تنظیمات پنل سنایی / X-UI / TX-UI'
-                                ])
-                                ->live()
-                                ->required(),
-
-                            Section::make('⚙️ حالت اتصال پنل')
-                                ->description('نوع اتصال به پنل X-UI را انتخاب کنید')
-                                ->visible(fn (Get $get) => $get('panel_type') === 'xui')
+                            Section::make('🌍 سیستم مولتی سرور')
+                                ->description('تمامی سرورها (مرزبان، سنایی و...) را از طریق منوی «مولتی سرور» در نوار کناری مدیریت کنید.')
                                 ->schema([
-                                    Toggle::make('enable_multilocation')
-                                        ->label('استفاده از سیستم مولتی لوکیشن (چند سروره)')
-                                        ->helperText('در صورت فعال‌سازی، باید سرورها را از منوی «مولتی سرور» تنظیم کنید و کاربر هنگام خرید لوکیشن انتخاب می‌کند.')
-                                        ->default(false)
-                                        ->live(),
+                                    Placeholder::make('multiserver_info')
+                                        ->content('✅ سیستم به طور کامل روی حالت مولتی سرور تنظیم شده است. لطفاً برای افزودن سرور جدید به منوی «مولتی سرور > سرورها» مراجعه کنید.')
+                                        ->columnSpanFull(),
                                 ]),
-
-                            // پیام راهنما وقتی مولتی لوکیشن فعال است
-                            Section::make('🌍 سیستم مولتی لوکیشن فعال است')
-                                ->description('شما در حال استفاده از سیستم چند سروره هستید. تنظیمات سرورها از طریق منوی «مولتی سرور» در sidebar انجام می‌شود.')
-                                ->visible(fn(Get $get) => $get('panel_type') === 'xui' && $get('enable_multilocation') === true)
-                                ->schema([
-                                    // می‌توانید اینجا یک placeholder یا اطلاعات تکمیلی بگذارید
-                                ]),
-
-                            Section::make('تنظیمات پنل مرزبان')
-                                ->visible(fn (Get $get) => $get('panel_type') === 'marzban')
-                                ->schema([
-                                    TextInput::make('marzban_host')->label('آدرس پنل مرزبان')->required(),
-                                    TextInput::make('marzban_sudo_username')->label('نام کاربری ادمین')->required(),
-                                    TextInput::make('marzban_sudo_password')->label('رمز عبور ادمین')->password()->required(),
-                                    TextInput::make('marzban_node_hostname')->label('آدرس دامنه/سرور برای کانفیگ')
-                                ]),
-
-                            // 🔥 فقط وقتی نمایش داده می‌شود که X-UI انتخاب شده AND مولتی لوکیشن غیرفعال باشد
-//                            Section::make('تنظیمات پنل سنایی / X-UI / TX-UI')
-//                                ->visible(fn(Get $get) => $get('panel_type') === 'xui' && !$get('enable_multilocation'))
-//                                ->schema([
-//                                    TextInput::make('xui_host')->label('آدرس کامل پنل سنایی')
-//                                        ->required(),
-//                                    TextInput::make('xui_user')->label('نام کاربری')
-//                                        ->required(),
-//                                    TextInput::make('xui_pass')->label('رمز عبور')->password()
-//                                        ->required(),
-//
-//                                    Select::make('xui_default_inbound_id')
-//                                        ->label('اینباند پیش‌فرض')
-//                                        ->options(function () {
-//                                            $options = [];
-//                                            $inbounds = \App\Models\Inbound::all();
-//
-//                                            foreach ($inbounds as $inbound) {
-//                                                $data = $inbound->inbound_data;
-//                                                if (!is_array($data) || !isset($data['id']) || ($data['enable'] ?? false) !== true) {
-//                                                    continue;
-//                                                }
-//
-//                                                $panelId = (string) $data['id'];
-//                                                $options[$panelId] = sprintf(
-//                                                    '%s (ID: %s) - %s:%s',
-//                                                    $data['remark'] ?? 'بدون عنوان',
-//                                                    $panelId,
-//                                                    strtoupper($data['protocol'] ?? 'unknown'),
-//                                                    $data['port'] ?? '-'
-//                                                );
-//                                            }
-//
-//                                            return $options;
-//                                        })
-//                                        ->getOptionLabelUsing(function ($value) {
-//                                            if (blank($value)) return 'انتخاب نشده';
-//
-//                                            $inbound = \App\Models\Inbound::firstWhere(function($item) use ($value) {
-//                                                return isset($item->inbound_data['id']) && (string)$item->inbound_data['id'] === (string)$value;
-//                                            });
-//
-//                                            return $inbound?->dropdown_label ?? "⚠️ نامعتبر (ID: $value)";
-//                                        })
-//                                        ->native(false)
-//                                        ->searchable()
-//                                        ->preload()
-//                                        ->placeholder('ابتدا Sync از X-UI را بزنید و صفحه را رفرش کنید')
-//                                        ->helperText('این اینباند برای پرداخت‌های خودکار استفاده می‌شود'),
-//
-//                                    Radio::make('xui_link_type')->label('نوع لینک تحویلی')->options(['single' => 'لینک تکی', 'subscription' => 'لینک سابسکریپشن'])->default('single')
-//                                        ->required(),
-//                                    TextInput::make('xui_subscription_url_base')->label('آدرس پایه لینک سابسکریپشن'),
-//                                ]),
-                   ]),
+                                
+                            // Hidden fields to maintain backward compatibility if needed, or forced values
+                            Hidden::make('panel_type')->default('xui'), 
+                            Hidden::make('enable_multilocation')->default(true),
+                        ]),
 
                     Tabs\Tab::make('تنظیمات پرداخت')->icon('heroicon-o-credit-card')->schema([
                         Section::make('پرداخت کارت به کارت')->schema([
@@ -276,6 +201,11 @@ class ThemeSettings extends Page implements HasForms
                         Section::make('اطلاعات اتصال ربات')->schema([
                             TextInput::make('telegram_bot_token')->label('توکن ربات تلگرام')->password(),
                             TextInput::make('telegram_admin_chat_id')->label('چت آی‌دی ادمین')->numeric(),
+                            TextInput::make('site_login_url')
+                                ->label('آدرس ورود به سایت (استفاده در دکمه اطلاعات ورود)')
+                                ->placeholder('https://example.com/login')
+                                ->helperText('در صورت خالی بودن، آدرس پیش‌فرض سیستم نمایش داده می‌شود.')
+                                ->url(),
                         ]),
                         Section::make('اجبار به عضویت در کانال')
                             ->description('کاربران باید قبل از استفاده از ربات، در کانال عضو شوند.')

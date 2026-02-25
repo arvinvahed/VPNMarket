@@ -1,0 +1,11 @@
+{
+    "name": "MatinBackup",
+    "alias": "matinbackup",
+    "description": "",
+    "keywords": [],
+    "priority": 0,
+    "providers": [
+        "Modules\\MatinBackup\\Providers\\MatinBackupServiceProvider"
+    ],
+    "files": []
+}

@@ -58,13 +58,13 @@ class LocationResource extends Resource
     {
         try {
             $settings = \App\Models\Setting::all()->pluck('value', 'key');
-            $panelType = $settings->get('panel_type');
             $isMultiEnabled = filter_var(
                 $settings->get('enable_multilocation', false),
                 FILTER_VALIDATE_BOOLEAN
             );
 
-            return $panelType === 'xui' && $isMultiEnabled;
+            // Show if Multi-Location is enabled, regardless of panel type
+            return $isMultiEnabled;
         } catch (\Exception $e) {
             return false;
         }

@@ -1,0 +1,30 @@
+{
+    "name": "nwidart/matinbackup",
+    "description": "",
+    "authors": [
+        {
+            "name": "Nicolas Widart",
+            "email": "n.widart@gmail.com"
+        }
+    ],
+    "extra": {
+        "laravel": {
+            "providers": [],
+            "aliases": {
+
+            }
+        }
+    },
+    "autoload": {
+        "psr-4": {
+            "Modules\\MatinBackup\\": "",
+            "Modules\\MatinBackup\\Database\\Factories\\": "database/factories/",
+            "Modules\\MatinBackup\\Database\\Seeders\\": "database/seeders/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Modules\\MatinBackup\\Tests\\": "tests/"
+        }
+    }
+}

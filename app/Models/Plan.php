@@ -16,6 +16,7 @@ class Plan extends Model
         'features',
         'is_popular',
         'is_active',
+        'server_type',
         'volume_gb',
         'duration_days'
     ];

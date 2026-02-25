@@ -24,7 +24,7 @@ class ManageTelegramBotSettings extends Page implements HasForms
 
     public ?string $activeTab = 'settings';
     public ?array $data = [];
-
+    public ?array $currentAmounts = [];
 
     public function mount(): void
     {
@@ -67,11 +67,6 @@ class ManageTelegramBotSettings extends Page implements HasForms
 //                    Textarea::make('bot_token')->label('توکن ربات')->rows(1),
 //                ])->columnSpan('full')->hidden(fn() => $this->activeTab !== 'settings'),
 
-
-
-
-
-
                 Section::make('تنظیمات کیف پول')
                     ->schema([
                         Repeater::make('deposit_amounts')
@@ -87,7 +82,17 @@ class ManageTelegramBotSettings extends Page implements HasForms
                                     ->minValue(1000),
                             ])
                             ->helperText('این مبالغ به صورت دکمه در ربات به کاربر نمایش داده می‌شوند.'),
-                    ])
+                    ]),
+
+                Section::make('تنظیمات نمایندگی')
+                    ->schema([
+                        TextInput::make('agent_deposit_card_number')
+                            ->label('شماره کارت برای شارژ نمایندگان')
+                            ->helperText('این شماره در صفحه شارژ کیف پول مینی‌اپ نمایندگی نمایش داده می‌شود. مثال: 6037 1234 5678 9999'),
+                        TextInput::make('agent_deposit_card_name')
+                            ->label('نام صاحب کارت')
+                            ->helperText('مثال: به نام مدیریت پنل'),
+                    ]),
             ])
             ->statePath('data');
     }
