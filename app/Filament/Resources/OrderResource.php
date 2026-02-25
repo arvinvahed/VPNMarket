@@ -312,7 +312,7 @@ class OrderResource extends Resource
                                             $p = ['type' => $stream['network'] ?? 'tcp', 'security' => $stream['security'] ?? 'none'];
                                             if ($p['security'] === 'tls') $p['sni'] = parse_url($xuiHost, PHP_URL_HOST);
                                             $qs = http_build_query(array_filter($p));
-                                            $finalConfig = "vless://{$finalUuid}@" . parse_url($xuiHost, PHP_URL_HOST) . ":{$inboundId}?{$qs}#" . rawurlencode($plan->name);
+                                            $finalConfig = "vless://{$finalUuid}@" . parse_url($xuiHost, PHP_URL_HOST) . ":{$port}?{$qs}#" . rawurlencode($plan->name);
                                     }
                                     $success = true;
                                 }
