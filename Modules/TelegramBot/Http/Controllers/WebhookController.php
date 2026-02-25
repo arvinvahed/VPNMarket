@@ -2036,7 +2036,7 @@ class WebhookController extends Controller
             $keyboard = Keyboard::make()->inline()
                 ->row([Keyboard::inlineButton(['text' => '🏠 بازگشت به منوی اصلی', 'callback_data' => '/start'])]);
 
-            $this->sendOrEditMessage($chatId, "❌ خطایی در بارگذاری پلن‌ها رخ داد.", $keyboard, $messageId);
+            $this->sendOrEditMessage($chatId, $this->escape("❌ خطایی در بارگذاری پلن‌ها رخ داد."), $keyboard, $messageId);
         }
     }
 
@@ -2112,7 +2112,7 @@ class WebhookController extends Controller
             $keyboard = Keyboard::make()->inline()
                 ->row([Keyboard::inlineButton(['text' => '🏠 بازگشت به منوی اصلی', 'callback_data' => '/start'])]);
 
-            $this->sendOrEditMessage($chatId, "❌ خطایی در بارگذاری پلن‌ها رخ داد.", $keyboard, $messageId);
+            $this->sendOrEditMessage($chatId, $this->escape("❌ خطایی در بارگذاری پلن‌ها رخ داد."), $keyboard, $messageId);
         }
     }
 
@@ -2858,7 +2858,7 @@ class WebhookController extends Controller
     {
         $user->update(['bot_state' => 'awaiting_deposit_amount']);
         $keyboard = Keyboard::make()->inline()->row([Keyboard::inlineButton(['text' => '❌ انصراف', 'callback_data' => '/cancel_action'])]);
-        $this->sendOrEditMessage($user->telegram_chat_id, "💳 لطفاً مبلغ دلخواه خود را (به تومان، حداقل ۱۰,۰۰۰) در یک پیام ارسال کنید:", $keyboard, $messageId);
+        $this->sendOrEditMessage($user->telegram_chat_id, $this->escape("💳 لطفاً مبلغ دلخواه خود را (به تومان، حداقل ۱۰,۰۰۰) در یک پیام ارسال کنید:"), $keyboard, $messageId);
     }
 
     protected function processDepositAmount($user, $amount, $messageId = null)
@@ -3966,7 +3966,7 @@ class WebhookController extends Controller
     {
         $payload = [
             'chat_id'      => $chatId,
-            'text'         => $this->escape($text),
+            'text'         => $text,
             'parse_mode'   => 'MarkdownV2',
             'reply_markup' => $keyboard
         ];
@@ -4027,7 +4027,7 @@ class WebhookController extends Controller
 
     protected function sendOrEditMainMenu($chatId, $text, $messageId = null)
     {
-        $this->sendOrEditMessage($chatId, $text, $this->getMainMenuKeyboard(), $messageId);
+        $this->sendOrEditMessage($chatId, $this->escape($text), $this->getMainMenuKeyboard(), $messageId);
     }
 
     protected function getReplyMainMenu(): Keyboard
