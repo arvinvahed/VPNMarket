@@ -346,18 +346,7 @@ class ServerResource extends Resource
 
     public static function shouldRegisterNavigation(): bool
     {
-        try {
-            $settings = \App\Models\Setting::all()->pluck('value', 'key');
-            $isMultiEnabled = filter_var(
-                $settings->get('enable_multilocation', false),
-                FILTER_VALIDATE_BOOLEAN
-            );
-
-            // Show if Multi-Location is enabled, regardless of panel type
-            return $isMultiEnabled;
-        } catch (\Exception $e) {
-            return false;
-        }
+        return true;
     }
 
     protected static function generateDefaultSubUrl(Forms\Get $get): string
