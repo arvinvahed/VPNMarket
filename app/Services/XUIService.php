@@ -150,7 +150,7 @@ class XUIService
                 );
 
             if ($isSuccess) {
-                Log::info('XUI Login successful');
+                Log::info('XUI Login successful', ['url' => $loginApiUrl]);
                 $this->isLoggedIn = true;
                 return true;
             } else {

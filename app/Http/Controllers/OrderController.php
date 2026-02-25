@@ -613,7 +613,7 @@ class OrderController extends Controller
                     }
 
                     if (!$xuiService->login()) {
-                        throw new \Exception('خطا در لاگین به پنل X-UI.');
+                        throw new \Exception("خطا در لاگین به پنل X-UI (Host: {$xuiHost}). لطفاً تنظیمات سرور را بررسی کنید.");
                     }
 
                     $clientData = [
