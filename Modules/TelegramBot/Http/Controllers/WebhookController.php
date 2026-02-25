@@ -3768,11 +3768,16 @@ class WebhookController extends Controller
             }
 
             if ($panelType === 'marzban') {
+                $marzbanHost = $settings->get('marzban_host');
+                if (empty($marzbanHost)) {
+                     throw new \Exception('آدرس پنل مرزبان تنظیم نشده است.');
+                }
+                
                 $marzbanService = new MarzbanService(
-                    $settings->get('marzban_host'),
-                    $settings->get('marzban_sudo_username'),
-                    $settings->get('marzban_sudo_password'),
-                    $settings->get('marzban_node_hostname')
+                    (string) $marzbanHost,
+                    (string) $settings->get('marzban_sudo_username'),
+                    (string) $settings->get('marzban_sudo_password'),
+                    (string) $settings->get('marzban_node_hostname')
                 );
                 $response = $marzbanService->createUser([
                     'username' => $uniqueUsername,

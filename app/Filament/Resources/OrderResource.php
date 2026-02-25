@@ -131,6 +131,20 @@ class OrderResource extends Resource
                                 $targetServerId = $originalOrder->server_id;
                             }
 
+                            // 🚨 اصلاح برای سفارشات بدون سرور (مثلاً کارت به کارت): انتخاب سرور پیش‌فرض
+                            if (!$targetServerId && $isMultiLocationEnabled && class_exists('Modules\MultiServer\Models\Server')) {
+                                $defaultServer = \Modules\MultiServer\Models\Server::where('is_active', true)
+                                    ->whereRaw('current_users < capacity')
+                                    ->first();
+                                if ($defaultServer) {
+                                    $targetServerId = $defaultServer->id;
+                                    // سرور انتخاب شده را روی سفارش ذخیره می‌کنیم
+                                    $order->server_id = $targetServerId;
+                                    // اگر تمدید باشد، باید روی سفارش اصلی هم ذخیره شود؟ خیر، چون این سفارش جدید است
+                                    Log::info("Default Server Selected for Order", ['order_id' => $order->id, 'server_id' => $targetServerId]);
+                                }
+                            }
+
                             Log::info("Order Approval Debug", [
                                 'order_id' => $order->id,
                                 'server_id_initial' => $order->server_id,
@@ -145,6 +159,7 @@ class OrderResource extends Resource
                                 if ($targetServer && $targetServer->is_active) {
                                     // اصلاح: تعیین نوع پنل بر اساس نوع سرور
                                     $panelType = strtolower($targetServer->type ?? 'xui');
+                                    if ($panelType === 'sanaei') $panelType = 'xui'; // پشتیبانی از نوع سنایی
 
                                     Log::info("Target Server Found", [
                                         'server_id' => $targetServer->id,
