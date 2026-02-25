@@ -584,32 +584,28 @@ class OrderController extends Controller
 
                     $numericInboundId = (int) $defaultInboundId;
                     
-                    // Try to find inbound in DB (for stream settings)
-                    $inbound = Inbound::whereJsonContains('inbound_data->id', $numericInboundId)->first();
-                    
-                    // If not in DB, we might need to fetch from API or handle gracefully
-                    // For now, let's assume if we use MultiServer, we might fallback to API or just require DB sync
-                    // But if $inbound is null, we can't get streamSettings for VLESS link generation unless we fetch from API
-                    
-                    if (!$inbound || !$inbound->inbound_data) {
-                         // Attempt to fetch from API if not in DB?
-                         // For now, throw error as before, but with clearer message
-                         // Or we can try to fetch it if we have xuiService
-                         try {
-                             if ($xuiService->login()) {
-                                 $inbounds = $xuiService->getInbounds();
-                                 foreach($inbounds as $ib) {
-                                     if ($ib['id'] == $numericInboundId) {
-                                         $inboundData = $ib;
-                                         break;
-                                     }
-                                 }
-                             }
-                         } catch (\Exception $e) {
-                             // ignore
-                         }
-                    } else {
-                        $inboundData = $inbound->inbound_data;
+                    // Try to fetch from API first (to ensure fresh config from X-UI directly)
+                    $inboundData = null;
+                    try {
+                        if ($xuiService->login()) {
+                            $inbounds = $xuiService->getInbounds();
+                            foreach($inbounds as $ib) {
+                                if ($ib['id'] == $numericInboundId) {
+                                    $inboundData = $ib;
+                                    break;
+                                }
+                            }
+                        }
+                    } catch (\Exception $e) {
+                        Log::warning("Failed to fetch inbounds from API: " . $e->getMessage());
+                    }
+
+                    // Fallback to DB if not found via API
+                    if (!$inboundData) {
+                        $inbound = Inbound::whereJsonContains('inbound_data->id', $numericInboundId)->first();
+                        if ($inbound && $inbound->inbound_data) {
+                            $inboundData = $inbound->inbound_data;
+                        }
                     }
 
                     if (!isset($inboundData)) {
@@ -630,7 +626,7 @@ class OrderController extends Controller
                     // تمدید سرویس در X-UI
                     // ==========================================
                     if ($isRenewal) {
-                        $linkType = $settings->get('xui_link_type', 'single');
+                        $linkType = $server->link_type ?? $settings->get('xui_link_type', 'single');
                         $originalConfig = $originalOrder->config_details;
 
                         // پیدا کردن کلاینت توسط ایمیل
@@ -673,7 +669,7 @@ class OrderController extends Controller
                         $response = $xuiService->addClient($inboundData['id'], $clientData);
 
                         if ($response && isset($response['success']) && $response['success']) {
-                            $linkType = $settings->get('xui_link_type', 'single');
+                            $linkType = $server->link_type ?? $settings->get('xui_link_type', 'single');
 
                             if ($linkType === 'subscription') {
                                 $subId = $response['generated_subId'];
@@ -685,6 +681,43 @@ class OrderController extends Controller
                                 } else {
                                     throw new \Exception('خطا در ساخت لینک سابسکریپشن.');
                                 }
+                            } elseif ($linkType === 'tunnel' && $server) {
+                                $uuid = $response['generated_uuid'];
+                                $streamSettings = $inboundData['streamSettings'] ?? [];
+                                if (is_string($streamSettings)) {
+                                    $streamSettings = json_decode($streamSettings, true) ?? [];
+                                }
+                                $protocol = $inboundData['protocol'] ?? 'vless';
+                                
+                                $tunnelAddress = $server->tunnel_address;
+                                $tunnelPort = $server->tunnel_port ?? 443;
+                                $tunnelHasTls = filter_var($server->tunnel_is_https, FILTER_VALIDATE_BOOLEAN);
+
+                                $paramsArray = [
+                                    'type' => $streamSettings['network'] ?? 'tcp',
+                                ];
+
+                                if ($tunnelHasTls) {
+                                    $paramsArray['security'] = 'tls';
+                                    $paramsArray['sni'] = $tunnelAddress;
+                                } else {
+                                    $paramsArray['security'] = 'none';
+                                    if ($protocol === 'vless') {
+                                        $paramsArray['encryption'] = 'none';
+                                    }
+                                }
+                                
+                                if (($paramsArray['type'] ?? '') === 'ws' && isset($streamSettings['wsSettings'])) {
+                                    $paramsArray['path'] = $streamSettings['wsSettings']['path'] ?? '/';
+                                    $paramsArray['host'] = $streamSettings['wsSettings']['headers']['Host'] ?? $tunnelAddress;
+                                }
+
+                                $params = http_build_query(array_filter($paramsArray));
+                                $fullRemark = $uniqueUsername . '|' . ($inboundData['remark'] ?? 'Account');
+                                
+                                $finalConfig = "vless://{$uuid}@{$tunnelAddress}:{$tunnelPort}?{$params}#" . urlencode($fullRemark);
+                                $success = true;
+
                             } else {
                                 $uuid = $response['generated_uuid'];
                                 $streamSettings = $inboundData['streamSettings'] ?? [];
@@ -692,8 +725,9 @@ class OrderController extends Controller
                                 if (is_string($streamSettings)) {
                                     $streamSettings = json_decode($streamSettings, true) ?? [];
                                 }
+                                $protocol = $inboundData['protocol'] ?? 'vless';
 
-                                $parsedUrl = parse_url($settings->get('xui_host'));
+                                $parsedUrl = parse_url($server->full_host ?? $settings->get('xui_host'));
                                 $serverIpOrDomain = !empty($inboundData['listen']) ? $inboundData['listen'] : $parsedUrl['host'];
                                 $port = $inboundData['port'];
                                 $remark = $inboundData['remark'];
@@ -705,6 +739,10 @@ class OrderController extends Controller
                                     'sni' => $streamSettings['tlsSettings']['serverName'] ?? null,
                                     'host' => $streamSettings['wsSettings']['headers']['Host'] ?? null
                                 ];
+
+                                if (($paramsArray['security'] === 'none' || empty($paramsArray['security'])) && $protocol === 'vless') {
+                                    $paramsArray['encryption'] = 'none';
+                                }
 
                                 $params = http_build_query(array_filter($paramsArray));
                                 $fullRemark = $uniqueUsername . '|' . $remark;

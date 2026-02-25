@@ -20,7 +20,14 @@ class XUIService
     public function __construct(string $host, string $username, string $password)
     {
         $parsedUrl = parse_url(rtrim($host, '/'));
-        $this->baseUrl = ($parsedUrl['scheme'] ?? 'http') . '://' . $parsedUrl['host'] . (isset($parsedUrl['port']) ? ':' . $parsedUrl['port'] : '');
+
+        if ($parsedUrl === false) {
+            // Fallback for simple cases or throw exception
+            // If parse_url fails, it's likely a serious URL format issue (e.g. bad port)
+            throw new \InvalidArgumentException("Invalid URL format: $host");
+        }
+
+        $this->baseUrl = ($parsedUrl['scheme'] ?? 'http') . '://' . ($parsedUrl['host'] ?? 'localhost') . (isset($parsedUrl['port']) ? ':' . $parsedUrl['port'] : '');
         $this->basePath = $parsedUrl['path'] ?? '';
 
         if (!empty($this->basePath) && !str_starts_with($this->basePath, '/')) {
@@ -43,12 +50,19 @@ class XUIService
 
     private function getClient(): PendingRequest
     {
-        return Http::withOptions([
+        $options = [
             'cookies' => $this->cookieJar,
             'verify' => false,
             'timeout' => 120,
             'connect_timeout' => 60,
-        ])->withoutVerifying();
+        ];
+
+        // افزودن پشتیبانی از پروکسی اگر در .env تعریف شده باشد
+        if (env('HTTP_PROXY')) {
+            $options['proxy'] = env('HTTP_PROXY');
+        }
+
+        return Http::withOptions($options)->withoutVerifying();
     }
 
     public function getClients(int $inboundId): array
