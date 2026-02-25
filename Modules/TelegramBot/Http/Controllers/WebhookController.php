@@ -266,9 +266,9 @@ class WebhookController extends Controller
 
         $message = "🔐 *اطلاعات ورود به پنل کاربری*\n\n";
         $message .= "👤 *نام کاربری:* `{$username}`\n";
-        $message .= "🔑 *کلمه عبور:* (مخفی)\n\n";
-        $message .= "🌐 *آدرس ورود:* \n" . $this->escape($loginUrl) . "\n\n";
-        $message .= "⚠️ *نکته:* اگر رمز عبور خود را فراموش کرده‌اید یا اولین بار است که وارد می‌شوید، می‌توانید یک رمز عبور جدید بسازید.";
+        $message .= "🔑 *کلمه عبور:* " . $this->escape("(مخفی)") . "\n\n";
+        $message .= "🌐 *آدرس ورود:*\n" . $this->escape($loginUrl) . "\n\n";
+        $message .= "⚠️ *نکته:* " . $this->escape("اگر رمز عبور خود را فراموش کرده‌اید یا اولین بار است که وارد می‌شوید، می‌توانید یک رمز عبور جدید بسازید.");
 
         $keyboard = Keyboard::make()->inline()
             ->row([
@@ -295,8 +295,8 @@ class WebhookController extends Controller
         $message = "✅ *رمز عبور جدید ساخته شد*\n\n";
         $message .= "👤 *نام کاربری:* `{$username}`\n";
         $message .= "🔑 *کلمه عبور جدید:* `{$newPassword}`\n\n";
-        $message .= "🌐 *آدرس ورود:* \n" . $this->escape($loginUrl) . "\n\n";
-        $message .= "⚠️ لطفاً این رمز را در جای امنی یادداشت کنید.";
+        $message .= "🌐 *آدرس ورود:*\n" . $this->escape($loginUrl) . "\n\n";
+        $message .= "⚠️ " . $this->escape("لطفاً این رمز را در جای امنی یادداشت کنید.");
 
         // We can just show a "Back" button or no button
         $keyboard = Keyboard::make()->inline()
@@ -332,8 +332,8 @@ class WebhookController extends Controller
             switch ($resellerRequest->status) {
             case 'pending':
                 $message = "⏳ *درخواست نمایندگی در انتظار بررسی*\n\n";
-                $message .= "درخواست شما برای نمایندگی در حال بررسی توسط ادمین است.\n";
-                $message .= "لطفاً صبور باشید، پس از تایید به شما اطلاع داده خواهد شد.";
+                $message .= $this->escape("درخواست شما برای نمایندگی در حال بررسی توسط ادمین است.") . "\n";
+                $message .= $this->escape("لطفاً صبور باشید، پس از تایید به شما اطلاع داده خواهد شد.");
 
                 $keyboard = Keyboard::make()->inline()
                     ->row([Keyboard::inlineButton(['text' => '🔄 بررسی مجدد وضعیت', 'callback_data' => 'agent_check_status'])])
@@ -341,7 +341,7 @@ class WebhookController extends Controller
 
                 Telegram::sendMessage([
                     'chat_id' => $chatId,
-                    'text' => $this->escape($message),
+                    'text' => $message,
                     'parse_mode' => 'MarkdownV2',
                     'reply_markup' => $keyboard
                 ]);
@@ -349,8 +349,8 @@ class WebhookController extends Controller
 
             case 'rejected':
                 $message = "❌ *درخواست نمایندگی رد شد*\n\n";
-                $message .= "دلیل: " . ($resellerRequest->rejection_reason ?: 'مشخص نشده') . "\n\n";
-                $message .= "می‌توانید دوباره درخواست دهید.";
+                $message .= "دلیل: " . $this->escape($resellerRequest->rejection_reason ?: 'مشخص نشده') . "\n\n";
+                $message .= $this->escape("می‌توانید دوباره درخواست دهید.");
 
                 $keyboard = Keyboard::make()->inline()
                     ->row([Keyboard::inlineButton(['text' => '📝 ثبت درخواست جدید', 'callback_data' => 'agent_register'])])
@@ -358,7 +358,7 @@ class WebhookController extends Controller
 
                 Telegram::sendMessage([
                     'chat_id' => $chatId,
-                    'text' => $this->escape($message),
+                    'text' => $message,
                     'parse_mode' => 'MarkdownV2',
                     'reply_markup' => $keyboard
                 ]);
@@ -367,7 +367,7 @@ class WebhookController extends Controller
             case 'approved':
                 // درخواست تایید شده، اما هنوز نماینده فعال نشده
                 $message = "✅ *درخواست نمایندگی شما تایید شده*\n\n";
-                $message .= "لطفاً منتظر بمانید تا حساب نمایندگی شما فعال شود.";
+                $message .= $this->escape("لطفاً منتظر بمانید تا حساب نمایندگی شما فعال شود.");
                 
                 $keyboard = Keyboard::make()->inline()
                     ->row([Keyboard::inlineButton(['text' => '🔄 بررسی مجدد وضعیت', 'callback_data' => 'agent_check_status'])])
@@ -375,7 +375,7 @@ class WebhookController extends Controller
 
                 Telegram::sendMessage([
                     'chat_id' => $chatId,
-                    'text' => $this->escape($message),
+                    'text' => $message,
                     'parse_mode' => 'MarkdownV2',
                     'reply_markup' => $keyboard
                 ]);
@@ -385,12 +385,12 @@ class WebhookController extends Controller
         // اگر نماینده غیرفعال یا تعلیق شده باشه
         if ($reseller && in_array($reseller->status, ['inactive', 'banned'])) {
             $message = "🚫 *نمایندگی شما غیرفعال شده*\n\n";
-            $message .= $reseller->status === 'banned' ? "نمایندگی شما مسدود شده است." : "نمایندگی شما غیرفعال شده است.";
-            $message .= "\nلطفاً با پشتیبانی تماس بگیرید.";
+            $message .= $this->escape($reseller->status === 'banned' ? "نمایندگی شما مسدود شده است." : "نمایندگی شما غیرفعال شده است.");
+            $message .= "\n" . $this->escape("لطفاً با پشتیبانی تماس بگیرید.");
 
                 Telegram::sendMessage([
                     'chat_id' => $chatId,
-                    'text' => $this->escape($message),
+                    'text' => $message,
                     'parse_mode' => 'MarkdownV2',
                     'reply_markup' => $this->getReplyMainMenu()
                 ]);
@@ -435,12 +435,12 @@ class WebhookController extends Controller
         $maxAccounts = $agentPlan ? $agentPlan->account_limit : 16;
 
         $message = "🏢 *درخواست نمایندگی*\n\n";
-        $message .= "با عضویت در سیستم نمایندگی می‌توانید:\n";
-        $message .= "✅ تا " . $this->escape($maxAccounts) . " اکانت بسازید و بفروشید\n";
-        $message .= "✅ سرور اختصاصی خریداری کنید\n";
-        $message .= "✅ از تعرفه ویژه نمایندگان استفاده کنید\n\n";
-        $message .= "💰 *هزینه ثبت‌نام: " . $this->escape(number_format($registrationFee)) . " تومان*\n";
-        $message .= "📱 برای ثبت درخواست، مینی‌اپ را باز کنید:";
+        $message .= $this->escape("با عضویت در سیستم نمایندگی می‌توانید:") . "\n";
+        $message .= "✅ " . $this->escape("تا {$maxAccounts} اکانت بسازید و بفروشید") . "\n";
+        $message .= "✅ " . $this->escape("سرور اختصاصی خریداری کنید") . "\n";
+        $message .= "✅ " . $this->escape("از تعرفه ویژه نمایندگان استفاده کنید") . "\n\n";
+        $message .= "💰 *هزینه ثبت‌نام: " . $this->escape(number_format($registrationFee) . " تومان") . "*\n";
+        $message .= "📱 " . $this->escape("برای ثبت درخواست، مینی‌اپ را باز کنید:");
 
         $webAppUrl = route('webapp.agent.register', ['user_id' => $chatId]);
         $webAppUrl = str_replace('http://', 'https://', $webAppUrl);
@@ -463,7 +463,7 @@ class WebhookController extends Controller
 
         Telegram::sendMessage([
             'chat_id' => $chatId,
-            'text' => $this->escape($message),
+            'text' => $message,
             'parse_mode' => 'MarkdownV2',
             'reply_markup' => $keyboard
         ]);
@@ -488,10 +488,10 @@ class WebhookController extends Controller
 
         $message = "🏢 *پنل مدیریت نمایندگی*\n\n";
         $message .= "👤 نام: {$this->escape($user->name)}\n";
-        $message .= "💰 موجودی: *{$balance} تومان*\n";
-        $message .= "📊 وضعیت اکانت‌ها: *{$createdCount} / {$maxCount}*\n";
-        $message .= "💸 قیمت هر اکانت: *" . number_format($accountPrice) . " تومان*\n\n";
-        $message .= "👇 برای مدیریت کامل روی دکمه زیر کلیک کنید:";
+        $message .= "💰 موجودی: *" . $this->escape($balance . " تومان") . "*\n";
+        $message .= "📊 وضعیت اکانت‌ها: *" . $this->escape("{$createdCount} / {$maxCount}") . "*\n";
+        $message .= "💸 قیمت هر اکانت: *" . $this->escape(number_format($accountPrice) . " تومان") . "*\n\n";
+        $message .= "👇 " . $this->escape("برای مدیریت کامل روی دکمه زیر کلیک کنید:");
 
 
 
@@ -578,9 +578,9 @@ class WebhookController extends Controller
                         $welcomeMessage .= "\n\n🎁 هدیه خوش‌آمدگویی: " . number_format($welcomeGift) . " تومان به کیف پول شما اضافه شد.";
                     }
                     if ($referrer->telegram_chat_id) {
-                        $referrerMessage = "👤 *خبر خوب!*\n\nکاربر جدیدی با نام «{$userFirstName}» با لینک دعوت شما به ربات پیوست.";
+                        $referrerMessage = "👤 *خبر خوب!*\n\n" . $this->escape("کاربر جدیدی با نام «{$userFirstName}» با لینک دعوت شما به ربات پیوست.");
                         try {
-                            Telegram::sendMessage(['chat_id' => $referrer->telegram_chat_id, 'text' => $this->escape($referrerMessage), 'parse_mode' => 'MarkdownV2']);
+                            Telegram::sendMessage(['chat_id' => $referrer->telegram_chat_id, 'text' => $referrerMessage, 'parse_mode' => 'MarkdownV2']);
                         } catch (\Exception $e) {
                             Log::error("Failed to send referral notification: " . $e->getMessage());
                         }
