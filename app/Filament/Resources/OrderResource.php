@@ -153,7 +153,9 @@ class OrderResource extends Resource
                                 'panel_type_default' => $panelType
                             ]);
 
-                            if ($isMultiLocationEnabled && class_exists('Modules\MultiServer\Models\Server') && $targetServerId) {
+                            // اصلاح: بررسی وجود سرور حتی اگر حالت چند سروری غیرفعال باشد
+                            // اگر سفارش دارای سرور مشخص است، باید تنظیمات آن سرور اعمال شود
+                            if (($isMultiLocationEnabled || $targetServerId) && class_exists('Modules\MultiServer\Models\Server') && $targetServerId) {
                                 /** @var \Modules\MultiServer\Models\Server|null $targetServer */
                                 $targetServer = \Modules\MultiServer\Models\Server::find($targetServerId);
                                 if ($targetServer && $targetServer->is_active) {
