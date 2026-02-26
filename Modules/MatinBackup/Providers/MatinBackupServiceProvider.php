@@ -6,6 +6,7 @@ use Illuminate\Support\ServiceProvider;
 use Nwidart\Modules\Traits\PathNamespace;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
+use Illuminate\Console\Scheduling\Schedule;
 
 class MatinBackupServiceProvider extends ServiceProvider
 {
@@ -42,7 +43,16 @@ class MatinBackupServiceProvider extends ServiceProvider
      */
     protected function registerCommands(): void
     {
-        // $this->commands([]);
+        // Use __DIR__ to be absolutely sure about the path
+        $commandFile = __DIR__ . '/../Console/BackupDailyCommand.php';
+        
+        if (file_exists($commandFile)) {
+            require_once $commandFile;
+            
+            $this->commands([
+                \Modules\MatinBackup\Console\BackupDailyCommand::class,
+            ]);
+        }
     }
 
     /**
@@ -50,10 +60,10 @@ class MatinBackupServiceProvider extends ServiceProvider
      */
     protected function registerCommandSchedules(): void
     {
-        // $this->app->booted(function () {
-        //     $schedule = $this->app->make(Schedule::class);
-        //     $schedule->command('inspire')->hourly();
-        // });
+        $this->app->booted(function () {
+            $schedule = $this->app->make(Schedule::class);
+            $schedule->command('backup:daily-telegram')->daily();
+        });
     }
 
     /**

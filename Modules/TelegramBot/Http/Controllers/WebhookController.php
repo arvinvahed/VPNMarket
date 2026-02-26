@@ -392,7 +392,7 @@ class WebhookController extends Controller
                     'chat_id' => $chatId,
                     'text' => $message,
                     'parse_mode' => 'MarkdownV2',
-                    'reply_markup' => $this->getReplyMainMenu()
+                    'reply_markup' => $this->getReplyMainMenu($chatId)
                 ]);
         }
         
@@ -591,7 +591,7 @@ class WebhookController extends Controller
             Telegram::sendMessage([
                 'chat_id' => $chatId,
                 'text' => $welcomeMessage,
-                'reply_markup' => $this->getReplyMainMenu()
+                'reply_markup' => $this->getReplyMainMenu($chatId)
             ]);
             return;
         }
@@ -653,14 +653,14 @@ class WebhookController extends Controller
                     'chat_id' => $chatId,
                     'text' => $this->escape($startMessage),
                     'parse_mode' => 'MarkdownV2',
-                    'reply_markup' => $this->getReplyMainMenu()
+                    'reply_markup' => $this->getReplyMainMenu($chatId)
                 ]);
                 break;
             default:
                 Telegram::sendMessage([
                     'chat_id' => $chatId,
                     'text' => 'دستور شما نامفهوم است. لطفاً از دکمه‌های منو استفاده کنید.',
-                    'reply_markup' => $this->getReplyMainMenu()
+                    'reply_markup' => $this->getReplyMainMenu($chatId)
                 ]);
                 break;
         }
@@ -726,8 +726,8 @@ class WebhookController extends Controller
 
         $keyboard = Keyboard::make()->inline()->row([Keyboard::inlineButton(['text' => '❌ انصراف', 'callback_data' => '/cancel_action'])]);
         $message = "👤 *انتخاب نام کاربری سرویس*\n\n";
-        $message .= "لطفاً یک نام کاربری انگلیسی برای سرویس خود وارد کنید.\n";
-        $message .= "🔹 فقط حروف انگلیسی و اعداد مجاز است (حداقل ۳ حرف).\n";
+        $message .= "لطفاً یک نام کاربری انگلیسی برای سرویس خود وارد کنید\\.\n";
+        $message .= "🔹 فقط حروف انگلیسی و اعداد مجاز است \\(حداقل ۳ حرف\\)\\.\n";
         $message .= "🔹 مثال: `arvin123` یا `myvpn`";
 
         $this->sendOrEditMessage($user->telegram_chat_id, $message, $keyboard, $messageId);
@@ -877,12 +877,20 @@ class WebhookController extends Controller
         }
 
         if (Str::startsWith($data, 'show_duration_')) {
+            try {
+                Telegram::answerCallbackQuery(['callback_query_id' => $callbackQuery->getId()]);
+            } catch (\Exception $e) {}
+
             $durationDays = (int)Str::after($data, 'show_duration_');
             $this->sendPlansByDuration($chatId, $durationDays, $messageId);
             return;
         }
 
         if (Str::startsWith($data, 'show_service_')) {
+            try {
+                Telegram::answerCallbackQuery(['callback_query_id' => $callbackQuery->getId()]);
+            } catch (\Exception $e) {}
+
             $orderId = (int) Str::after($data, 'show_service_');
             $this->showServiceDetails($user, $orderId, $messageId);
             return;
@@ -1020,7 +1028,7 @@ class WebhookController extends Controller
                     Telegram::sendMessage([
                         'chat_id' => $chatId,
                         'text' => '🌟 منوی اصلی',
-                        'reply_markup' => $this->getReplyMainMenu()
+                        'reply_markup' => $this->getReplyMainMenu($chatId)
                     ]);
                     try { Telegram::deleteMessage(['chat_id' => $chatId, 'message_id' => $messageId]); } catch (\Exception $e) {}
                     break;
@@ -1046,7 +1054,7 @@ class WebhookController extends Controller
                         Telegram::sendMessage([
                             'chat_id' => $chatId,
                             'text' => 'خوش آمدید! حالا می‌توانید از ربات استفاده کنید.',
-                            'reply_markup' => $this->getReplyMainMenu()
+                            'reply_markup' => $this->getReplyMainMenu($chatId)
                         ]);
                     } else {
                         Telegram::answerCallbackQuery([
@@ -1064,7 +1072,7 @@ class WebhookController extends Controller
                     Telegram::sendMessage([
                         'chat_id' => $chatId,
                         'text' => '✅ عملیات لغو شد.',
-                        'reply_markup' => $this->getReplyMainMenu(),
+                        'reply_markup' => $this->getReplyMainMenu($chatId),
                     ]);
                     break;
                 default:
@@ -1072,7 +1080,7 @@ class WebhookController extends Controller
                     Telegram::sendMessage([
                         'chat_id' => $chatId,
                         'text' => 'دستور نامعتبر.',
-                        'reply_markup' => $this->getReplyMainMenu(),
+                        'reply_markup' => $this->getReplyMainMenu($chatId),
                     ]);
                     break;
             }
@@ -2078,7 +2086,8 @@ class WebhookController extends Controller
                 if ($index > 0) {
                     $message .= "〰️〰️〰️\n\n";
                 }
-                $message .= ($index + 1) . ". 💎 *" . $this->escape($plan->name) . "*\n";
+                // Escape the dot after the index number for MarkdownV2
+                $message .= ($index + 1) . "\. 💎 *" . $this->escape($plan->name) . "*\n";
                 $message .= "   📦 " . $this->escape($plan->volume_gb . ' گیگ') . "\n";
                 $message .= "   💳 " . $this->escape(number_format($plan->price) . ' تومان') . "\n";
             }
@@ -2333,20 +2342,20 @@ class WebhookController extends Controller
             $remainingText = "*منقضی شده*";
         } elseif ($daysRemaining <= 7) {
             $statusIcon = '🟡';
-            $remainingText = "*" . $this->escape($daysRemaining . ' روز') . "* باقی‌مانده (تمدید کنید)";
+            $remainingText = "*" . $this->escape($daysRemaining . ' روز') . "* باقی‌مانده \(تمدید کنید\)";
         } else {
             $remainingText = "*" . $this->escape($daysRemaining . ' روز') . "* باقی‌مانده";
         }
 
-        $message = "🔍 جزئیات سرویس #{$order->id}\n\n";
+        $message = "🔍 جزئیات سرویس \#{$order->id}\n\n";
         $message .= "{$statusIcon} سرویس: " . $this->escape($order->plan->name) . "\n";
         $message .= "👤 نام کاربری: `" . $panelUsername . "`\n";
-        $message .= "🗓 انقضا: " . $this->escape($expiresAt->format('Y/m/d')) . " - " . $remainingText . "\n";
+        $message .= "🗓 انقضا: " . $this->escape($expiresAt->format('Y/m/d')) . " \- " . $remainingText . "\n";
         $message .= "📦  حجم:  " . $this->escape($order->plan->volume_gb . ' گیگابایت') . "\n";
         if (!empty($order->config_details)) {
-            $message .= "\n🔗 *لینک اتصال:*\n" . $order->config_details;
+            $message .= "\n🔗 *لینک اتصال \(جهت کپی\):*\n`" . $order->config_details . "`";
         } else {
-            $message .= "\n⏳ *در حال آماده‌سازی کانفیگ...*";
+            $message .= "\n⏳ *در حال آماده‌سازی کانفیگ\.\.\.*";
         }
 
         $keyboard = Keyboard::make()->inline();
@@ -2720,6 +2729,22 @@ class WebhookController extends Controller
                                 $configLink = "{$protocolScheme}://{$baseUrl}" . rtrim($subPath, '/') . '/' . $subId;
                             } else {
                                 $subBaseUrl = rtrim($settings->get('xui_subscription_url_base'), '/');
+                                
+                                // Fallback: if subscription URL base is not set, try to use X-UI host
+                                if (empty($subBaseUrl) && !empty($xuiHost)) {
+                                    $parsed = parse_url($xuiHost);
+                                    $scheme = $parsed['scheme'] ?? 'http';
+                                    $host = $parsed['host'] ?? '';
+                                    $port = isset($parsed['port']) ? ':' . $parsed['port'] : '';
+                                    
+                                    // Fix: If panel is on 2053, subscription is usually on 2096
+                                    if ($port === ':2053') {
+                                        $port = ':2096';
+                                    }
+                                    
+                                    $subBaseUrl = "{$scheme}://{$host}{$port}";
+                                }
+                                
                                 $configLink = $subBaseUrl . '/sub/' . $subId;
                             }
                             break;
@@ -3851,6 +3876,22 @@ class WebhookController extends Controller
                                 $configLink = "{$prot}://{$baseUrl}" . rtrim($subPath, '/') . '/' . $subId;
                             } else {
                                 $subBaseUrl = rtrim($settings->get('xui_subscription_url_base'), '/');
+                                
+                                // Fallback: if subscription URL base is not set, try to use X-UI host
+                                if (empty($subBaseUrl) && !empty($xuiHost)) {
+                                    $parsed = parse_url($xuiHost);
+                                    $scheme = $parsed['scheme'] ?? 'http';
+                                    $host = $parsed['host'] ?? '';
+                                    $port = isset($parsed['port']) ? ':' . $parsed['port'] : '';
+                                    
+                                    // Fix: If panel is on 2053, subscription is usually on 2096
+                                    if ($port === ':2053') {
+                                        $port = ':2096';
+                                    }
+                                    
+                                    $subBaseUrl = "{$scheme}://{$host}{$port}";
+                                }
+                                
                                 $configLink = $subBaseUrl . '/sub/' . $subId;
                             }
                             break;
@@ -4035,18 +4076,19 @@ class WebhookController extends Controller
         $this->sendOrEditMessage($chatId, $this->escape($text), $this->getMainMenuKeyboard(), $messageId);
     }
 
-    protected function getReplyMainMenu(): Keyboard
+    protected function getReplyMainMenu($chatId = null): Keyboard
     {
         try {
-            $webAppUrl = route('webapp.index');
+            // ✅ استفاده از آدرس اصلی سایت به جای پنل نمایندگی
+            $webAppUrl = config('app.url');
             $webAppUrl = trim($webAppUrl);
 
-            if (!str_starts_with($webAppUrl, 'https://')) {
-                Log::warning('WebApp URL is not HTTPS, skipping button', ['url' => $webAppUrl]);
-                $webAppUrl = null;
+            // اطمینان از HTTPS بودن لینک
+            if (str_starts_with($webAppUrl, 'http://')) {
+                $webAppUrl = str_replace('http://', 'https://', $webAppUrl);
             }
         } catch (\Exception $e) {
-            Log::warning('Route webapp.index not found', ['error' => $e->getMessage()]);
+            Log::warning('App URL not found', ['error' => $e->getMessage()]);
             $webAppUrl = null;
         }
 

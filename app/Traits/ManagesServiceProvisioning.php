@@ -111,6 +111,30 @@ trait ManagesServiceProvisioning
                     if ($linkType === 'subscription') {
                         $subId = $response['generated_subId'] ?? null;
                         $subBaseUrl = rtrim($settings->get('xui_subscription_url_base'), '/');
+
+                        // Fallback: if subscription URL base is not set, try to use X-UI host
+                        if (empty($subBaseUrl)) {
+                            $xuiHost = $settings->get('xui_host');
+                            if (!empty($xuiHost)) {
+                                $parsed = parse_url($xuiHost);
+                                $scheme = $parsed['scheme'] ?? 'http';
+                                $host = $parsed['host'] ?? '';
+                                $port = isset($parsed['port']) ? ':' . $parsed['port'] : '';
+                                
+                                // Fix: If panel is on 2053, subscription is usually on 2096
+                                if ($port === ':2053') {
+                                    $port = ':2096';
+                                }
+
+                                $subBaseUrl = "{$scheme}://{$host}{$port}";
+                            }
+                        }
+
+                        // Universal Fix: Ensure port 2053 is replaced by 2096
+                        if (str_contains($subBaseUrl, ':2053')) {
+                            $subBaseUrl = str_replace(':2053', ':2096', $subBaseUrl);
+                        }
+
                         if ($subBaseUrl && $subId) {
                             $finalConfig = $subBaseUrl . '/sub/' . $subId;
                             $success = true;
