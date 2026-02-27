@@ -3457,8 +3457,14 @@ class WebhookController extends Controller
     protected function isUserMemberOfChannel($user)
     {
         $forceJoin = $this->settings->get('force_join_enabled', '0');
+        
+        Log::info("Membership Check Debug: User {$user->id}", [
+            'force_join_enabled' => $forceJoin,
+            'settings_count' => $this->settings->count()
+        ]);
 
-        if (!in_array($forceJoin, ['1', 1, true, 'on'], true)) {
+        if (!in_array($forceJoin, ['1', 1, true, 'on', 'true', 'True'], true)) {
+            Log::info("Membership Check: Force join disabled or invalid value.");
             return true;
         }
 
@@ -3468,18 +3474,25 @@ class WebhookController extends Controller
             return false;
         }
 
+        // Auto-fix: Add @ if missing for public channels
+        if (!str_starts_with($channelId, '@') && !str_starts_with($channelId, '-100')) {
+            $channelId = '@' . $channelId;
+        }
+
         try {
             $botToken = $this->settings->get('telegram_bot_token');
-            // ✅ اصلاح: حذف space بین bot و token
-
-
-
             $apiUrl = "https://api.telegram.org/bot{$botToken}/getChatMember";
-
 
             $response = Http::timeout(10)->get($apiUrl, [
                 'chat_id' => $channelId,
                 'user_id' => $user->telegram_chat_id,
+            ]);
+
+            Log::info("Telegram API Response for Membership Check", [
+                'status' => $response->status(),
+                'body' => $response->json(),
+                'channel_id' => $channelId,
+                'user_telegram_id' => $user->telegram_chat_id
             ]);
 
             if (!$response->successful()) {
@@ -3510,28 +3523,27 @@ class WebhookController extends Controller
             return;
         }
 
+        // Auto-fix: Add @ if missing for public channels
+        if (!str_starts_with($channelId, '@') && !str_starts_with($channelId, '-100')) {
+            $channelId = '@' . $channelId;
+        }
+
         $channelLink = null;
         $channelDisplayName = $channelId;
 
         if (str_starts_with($channelId, '@')) {
             $username = ltrim($channelId, '@');
-            // ✅ اصلاح: حذف space بعد از t.me/
-
-
-
             $channelLink = "https://t.me/{$username}";
-
-
             $channelDisplayName = "@" . $username;
         } elseif (preg_match('/^-100\d+$/', $channelId)) {
             $channelDisplayName = "کانال خصوصی";
             $channelLink = $this->settings->get('telegram_private_channel_invite_link');
         }
 
-        $message = "⛔️ *عضویت در کانال الزامی است!*\n\n";
-        $message .= "برای ادامه استفاده از ربات، باید در کانال زیر عضو شوید:\n\n";
-        $message .= "📢 {$channelDisplayName}\n\n";
-        $message .= "🔹 پس از عضویت، روی دکمه «✅ بررسی عضویت» بزنید.";
+        $message = "⛔️ *" . $this->escape("عضویت در کانال الزامی است!") . "*\n\n";
+        $message .= $this->escape("برای ادامه استفاده از ربات، باید در کانال زیر عضو شوید:") . "\n\n";
+        $message .= "📢 " . $this->escape($channelDisplayName) . "\n\n";
+        $message .= "🔹 " . $this->escape("پس از عضویت، روی دکمه «✅ بررسی عضویت» بزنید.");
 
         $keyboard = Keyboard::make()->inline();
 
