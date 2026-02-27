@@ -14,7 +14,7 @@ use Modules\Reseller\Models\Reseller;
 use Modules\Ticketing\Events\TicketCreated;
 use Modules\Ticketing\Events\TicketReplied;
 use Modules\Ticketing\Models\Ticket;
-use Illuminate\Routing\Controller;
+use App\Http\Controllers\Controller as BaseController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -30,7 +30,7 @@ use App\Models\DiscountCodeUsage;
 use Carbon\Carbon;
 use Telegram\Bot\FileUpload\InputFile;
 
-class WebhookController extends Controller
+class WebhookController extends BaseController
 {
     protected $settings;
 
@@ -39,7 +39,7 @@ class WebhookController extends Controller
      */
     public function __construct()
     {
-        $this->settings = collect();
+        $this->settings = \collect();
     }
 
     public function sendBroadcastMessage(string $chatId, string $message): bool
@@ -2571,7 +2571,12 @@ class WebhookController extends Controller
         );
 
         $isMultiServer = false;
-        $panelType = $settings->get('panel_type') ?? 'marzban';
+        $panelType = $settings->get('panel_type');
+        if (empty($panelType)) {
+            $hasXui = !empty($settings->get('xui_host')) && !empty($settings->get('xui_user')) && !empty($settings->get('xui_pass'));
+            $hasMarzban = !empty($settings->get('marzban_host'));
+            $panelType = $hasXui ? 'xui' : ($hasMarzban ? 'marzban' : 'xui');
+        }
         $targetServer = null; // ✅ تعریف اولیه
 
         // مقادیر پیش‌فرض
@@ -2581,8 +2586,20 @@ class WebhookController extends Controller
         $inboundId = (int) $settings->get('xui_default_inbound_id');
 
         // بررسی مولتی سرور
-        if ($isMultiLocationEnabled && class_exists('Modules\MultiServer\Models\Server') && $order->server_id) {
-            $targetServer = \Modules\MultiServer\Models\Server::find($order->server_id);
+        if ($isMultiLocationEnabled && class_exists('Modules\MultiServer\Models\Server')) {
+            // اگر روی سفارش سرور مشخص نیست، یک سرور فعال انتخاب کن
+            if (!$order->server_id) {
+                $targetServer = \Modules\MultiServer\Models\Server::where('is_active', true)
+                    ->whereRaw('current_users < capacity')
+                    ->first()
+                    ?: \Modules\MultiServer\Models\Server::where('is_active', true)->first();
+                if ($targetServer) {
+                    $order->server_id = $targetServer->id;
+                    try { $order->save(); } catch (\Exception $e) {}
+                }
+            } else {
+                $targetServer = \Modules\MultiServer\Models\Server::find($order->server_id);
+            }
             if ($targetServer && $targetServer->is_active) {
                 $isMultiServer = true;
                 $panelType = $targetServer->type ?? 'xui';
@@ -3164,7 +3181,12 @@ class WebhookController extends Controller
         $newExpiryDate = $baseDate->copy()->addDays($plan->duration_days);
 
         $isMultiServer = false;
-        $panelType = $settings->get('panel_type') ?? 'marzban';
+        $panelType = $settings->get('panel_type');
+        if (empty($panelType)) {
+            $hasXui = !empty($settings->get('xui_host')) && !empty($settings->get('xui_user')) && !empty($settings->get('xui_pass'));
+            $hasMarzban = !empty($settings->get('marzban_host'));
+            $panelType = $hasXui ? 'xui' : ($hasMarzban ? 'marzban' : 'xui');
+        }
         $targetServer = null;
 
         $xuiHost = $settings->get('xui_host');
@@ -3173,11 +3195,22 @@ class WebhookController extends Controller
         $inboundId = (int) $settings->get('xui_default_inbound_id');
 
         // بررسی مولتی سرور
-        if ($isMultiLocationEnabled && class_exists('Modules\MultiServer\Models\Server') && $originalOrder->server_id) {
-            $targetServer = \Modules\MultiServer\Models\Server::find($originalOrder->server_id);
+        if ($isMultiLocationEnabled && class_exists('Modules\MultiServer\Models\Server')) {
+            if (!$originalOrder->server_id) {
+                $targetServer = \Modules\MultiServer\Models\Server::where('is_active', true)
+                    ->whereRaw('current_users < capacity')
+                    ->first()
+                    ?: \Modules\MultiServer\Models\Server::where('is_active', true)->first();
+                if ($targetServer) {
+                    $originalOrder->server_id = $targetServer->id;
+                    try { $originalOrder->save(); } catch (\Exception $e) {}
+                }
+            } else {
+                $targetServer = \Modules\MultiServer\Models\Server::find($originalOrder->server_id);
+            }
             if ($targetServer && $targetServer->is_active) {
                 $isMultiServer = true;
-                $panelType = 'xui';
+                $panelType = $targetServer->type ?? 'xui';
                 $xuiHost = $targetServer->full_host;
                 $xuiUser = $targetServer->username;
                 $xuiPass = $targetServer->password;
@@ -3303,9 +3336,9 @@ class WebhookController extends Controller
         $tickets = $user->tickets()->latest()->take(4)->get();
         $message = "💬 *پشتیبانی*\n\n";
         if ($tickets->isEmpty()) {
-            $message .= "شما تاکنون هیچ تیکتی ثبت نکرده‌اید.";
+            $message .= $this->escape("شما تاکنون هیچ تیکتی ثبت نکرده‌اید.");
         } else {
-            $message .= "لیست آخرین تیکت‌های شما:\n";
+            $message .= $this->escape("لیست آخرین تیکت‌های شما:") . "\n";
             foreach ($tickets as $ticket) {
                 $status = match ($ticket->status) {
                     'open' => '🔵 باز',
@@ -3319,7 +3352,7 @@ class WebhookController extends Controller
                 $message .= "_{$this->escape($ticket->updated_at->diffForHumans())}_";
             }
         }
-
+        
         $keyboard = Keyboard::make()->inline()->row([Keyboard::inlineButton(['text' => '📝 ایجاد تیکت جدید', 'callback_data' => '/support_new'])]);
         foreach ($tickets as $ticket) {
             if ($ticket->status !== 'closed') {
@@ -3699,23 +3732,22 @@ class WebhookController extends Controller
             $this->sendOrEditMainMenu($user->telegram_chat_id, "❌ خطا در دریافت اطلاعات ربات", $messageId);
             return;
         }
-
+        
         $referralCode = $user->referral_code ?? Str::random(8);
         if (!$user->referral_code) {
             $user->update(['referral_code' => $referralCode]);
         }
-
-        // ✅ اصلاح: حذف space های اضافی
+        
         $referralLink = "https://t.me/{$botUsername}?start={$referralCode}";
         $referrerReward = number_format((int) $this->settings->get('referral_referrer_reward', 0));
         $referralCount = $user->referrals()->count();
-
+        
         $message = "🎁 *دعوت از دوستان*\n\n";
-        $message .= "با اشتراک‌گذاری لینک زیر، دوستان خود را به ربات دعوت کنید.\n\n";
-        $message .= "💸 با هر خرید موفق دوستانتان، *{$referrerReward} تومان* به کیف پول شما اضافه می‌شود.\n\n";
-        $message .= "🔗 *لینک دعوت شما:*\n`{$referralLink}`\n\n";
-        $message .= "👥 تعداد دعوت‌های موفق شما: *{$referralCount} نفر*";
-
+        $message .= $this->escape("با اشتراک‌گذاری لینک زیر، دوستان خود را به ربات دعوت کنید.") . "\n\n";
+        $message .= "💸 " . $this->escape("با هر خرید موفق دوستانتان، ") . "*".$this->escape("{$referrerReward} تومان")."* " . $this->escape("به کیف پول شما اضافه می‌شود.") . "\n\n";
+        $message .= "🔗 *" . $this->escape("لینک دعوت شما:") . "*\n`{$referralLink}`\n\n";
+        $message .= "👥 " . $this->escape("تعداد دعوت‌های موفق شما: ") . "*".$this->escape("{$referralCount} نفر")."*";
+        
         $keyboard = Keyboard::make()->inline()->row([Keyboard::inlineButton(['text' => '⬅️ بازگشت', 'callback_data' => '/start'])]);
         $this->sendOrEditMessage($user->telegram_chat_id, $message, $keyboard, $messageId);
     }
